@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Rafel</string>
+    <string name="accessibility_service_description">Allows Rafel to automatically assist you with screen interactions and messaging.</string>
+</resources>

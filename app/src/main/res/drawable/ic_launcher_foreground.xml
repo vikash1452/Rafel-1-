@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer futuristic energy ring -->
+    <path
+        android:pathData="M54,54m-27,0a27,27 0 1,0 54,0a27,27 0 1,0 -54,0"
+        android:strokeWidth="1.6"
+        android:strokeColor="#80FFB300"
+        android:fillColor="#00000000" />
+
+    <!-- Cardinal tech notches -->
+    <path
+        android:pathData="M54,23 L54,27 M54,81 L54,85 M23,54 L27,54 M81,54 L85,54"
+        android:strokeWidth="2.2"
+        android:strokeColor="#FFFFD54F"
+        android:strokeLineCap="round" />
+
+    <!-- Intermediate gear/symbol ring -->
+    <path
+        android:pathData="M54,54m-20,0a20,20 0 1,0 40,0a20,20 0 1,0 -40,0"
+        android:strokeWidth="2.4"
+        android:strokeColor="#FFFF9100"
+        android:fillColor="#00000000" />
+
+    <!-- Outer Core Radiant Glow -->
+    <path
+        android:pathData="M54,54m-14,0a14,14 0 1,0 28,0a14,14 0 1,0 -28,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="54"
+                android:centerY="54"
+                android:gradientRadius="14"
+                android:type="radial">
+                <item android:offset="0.0" android:color="#FFFFD54F" />
+                <item android:offset="0.5" android:color="#E6FF9100" />
+                <item android:offset="1.0" android:color="#33FF6D00" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Inner Core: White/Gold Bright Center -->
+    <path
+        android:pathData="M54,54m-7,0a7,7 0 1,0 14,0a7,7 0 1,0 -14,0"
+        android:fillColor="#FFFFFFF0" />
+
+    <!-- Central Diamond AI Spark -->
+    <path
+        android:pathData="M54,43 L57,51 L65,54 L57,57 L54,65 L51,57 L43,54 L51,51 Z"
+        android:fillColor="#FFFFF9C4" />
+</vector>

@@ -1,0 +1,8 @@
+{
+  "name": "Rafel",
+  "description": "A real-time personal AI voice assistant named Rafel using Gemini Live.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
