@@ -215,13 +215,13 @@ class ModelHealthMonitor(
         rec.lastErrorReason = reason
         rec.lastStatusCode = statusCode
 
-        // If model is rejected as not found / unsupported (1008 or 404), apply a longer cooldown (60s)
+        // If model is rejected as not found / unsupported (1008 or 404), keep bypassed for 30 minutes
         val isModelUnsupported = statusCode == 1008 || statusCode == 404 ||
                 reason.contains("not found", ignoreCase = true) ||
                 reason.contains("not supported", ignoreCase = true)
 
         val cooldownDuration = if (isModelUnsupported) {
-            60_000L
+            1_800_000L
         } else {
             val multiplier = (1L shl (failures - 1).coerceAtMost(4))
             (baseCooldownMs * multiplier).coerceAtMost(45_000L)

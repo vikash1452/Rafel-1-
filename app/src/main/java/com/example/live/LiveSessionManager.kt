@@ -55,7 +55,7 @@ class LiveSessionManager(
 
     @Volatile private var webSocket: WebSocket? = null
     private val client = OkHttpClient.Builder()
-        .connectTimeout(25, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .pingInterval(15, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
@@ -65,6 +65,7 @@ class LiveSessionManager(
     private val json = Json { ignoreUnknownKeys = true }
 
     @Volatile private var isSetupComplete = false
+    @Volatile private var useMinimalSetupFallback = false
     val currentGenerationId = AtomicLong(1L)
     val currentSessionId = AtomicLong(100L)
     private var isConnecting = false
@@ -575,7 +576,16 @@ class LiveSessionManager(
                 currentActiveModelId = activeModelInUse,
                 isTurnInProgress = modelTurnInProgress.get()
             )
-            routed.selectedModel?.liveSetupModelName ?: VoiceConfig.GEMINI_LIVE_MODEL
+            val candidate = routed.selectedModel?.liveSetupModelName ?: VoiceConfig.GEMINI_LIVE_MODEL
+            if (wsEndpointOverride == null) {
+                // Production cloud endpoint: skip obsolete models/gemini-3.8-live directly to avoid wasted 1008 round-trip
+                com.example.ai.router.AIModelRegistry.sanitizeSupportedModelId(
+                    candidate,
+                    com.example.ai.router.ModelProviderType.GEMINI_LIVE_WS
+                )
+            } else {
+                candidate
+            }
         }
         sessionConnectStartTimeMs.set(System.currentTimeMillis())
         RafelLogger.logLiveSessionCreated(sessionId)
@@ -649,6 +659,15 @@ class LiveSessionManager(
                 try {
                     webSocket.close(code, reason)
                 } catch (_: Exception) {}
+
+                if (!isSetupComplete && code == 1007 && !useMinimalSetupFallback) {
+                    android.util.Log.w("RAFEL-WS", "Model $activeModelInUse returned 1007 on tuned setup ($reason). Retrying with minimal setup...")
+                    useMinimalSetupFallback = true
+                    this@LiveSessionManager.webSocket = null
+                    isSetupComplete = false
+                    startSession(overrideModel = activeModelInUse)
+                    return
+                }
 
                 if (!isSetupComplete && (code == 1008 || code == 1011 || reason.contains("not found", ignoreCase = true) || reason.contains("not supported", ignoreCase = true))) {
                     val elapsedMs = (System.currentTimeMillis() - sessionConnectStartTimeMs.get()).coerceAtLeast(1L)
@@ -760,6 +779,15 @@ class LiveSessionManager(
                 val recent = recentServerMessages.toList().joinToString(" -> ")
                 android.util.Log.w("RAFEL-WS", "[WS_CLOSED] code=$code reason='$reason' setupComplete=$isSetupComplete lastMsgType=$lastReceivedServerMessageType recentMsgs=[$recent]")
 
+                if (!isSetupComplete && code == 1007 && !useMinimalSetupFallback) {
+                    android.util.Log.w("RAFEL-WS", "Model $activeModelInUse closed with 1007 on tuned setup ($reason). Retrying with minimal setup...")
+                    useMinimalSetupFallback = true
+                    this@LiveSessionManager.webSocket = null
+                    isSetupComplete = false
+                    startSession(overrideModel = activeModelInUse)
+                    return
+                }
+
                 // Automatic fallback via AIModelManager if primary model is rejected or closes unexpectedly during setup
                 if (!isSetupComplete && (code == 1008 || code == 1011 || reason.contains("not found", ignoreCase = true) || reason.contains("not supported", ignoreCase = true))) {
                     val elapsedMs = (System.currentTimeMillis() - sessionConnectStartTimeMs.get()).coerceAtLeast(1L)
@@ -804,37 +832,20 @@ class LiveSessionManager(
     }
 
     private fun sendSetupMessage(ws: WebSocket, sessionId: Long) {
-        val systemPrompt = com.example.ai.RafelPersona.SYSTEM_PROMPT + "\n\n" +
+        val systemPrompt = com.example.ai.RafelPersona.VOICE_LIVE_HUMAN_SYSTEM_PROMPT + "\n\n" +
             com.example.voice.VoiceBehaviorSettings.VOICE_DELIVERY_DIRECTIVE + "\n\n" + """
-CRITICAL COMPREHENSION & INTENT RULES:
-- Understand the user's actual spoken request and respond directly and accurately to it. Never deliberately contradict or invert the user's meaning.
-- STRICT CONVERSATIONAL DEFAULT: Rafel is first and foremost a conversational AI. Greetings, pleasantries, questions, or casual talk (e.g. "Hello", "Hi", "Hello Rafel", "Hey Rafel", "Good morning", "How are you?", "Are you there?", "What's up?", "Bharat ki rajdhani kya hai?") are NORMAL CONVERSATIONS and MUST NEVER trigger any tool calls! Simply respond naturally and conversationally in your female voice.
-- NEVER interpret greetings (e.g. "Hello Rafel", "Hello Rahul", "Hi Mom") as a call/dial intent. "Hello" NEVER means "Call".
-- ONLY execute `searchAndCallContact` if the user explicitly uses a calling action verb (e.g. "Call Rahul", "Amit ko call karo", "Papa ko phone lagao").
-- ONLY execute `sendWhatsAppMessage` if the user explicitly asks to send a WhatsApp message (e.g. "Amit ko WhatsApp message bhejo", "Mummy ko message likho").
-- ONLY execute `composeMessage` if the user asks to message on Instagram, Telegram, Messenger, Signal, or SMS (e.g. "Instagram par Rahul ko message draft karo", "Telegram par Neha ko message likho").
-- ONLY execute `readRecentMessages` if the user explicitly asks to read messages or check notifications (e.g. "mere naye messages padho", "Instagram par kya message aaya", "Telegram notification padho").
-- ONLY execute `explainMessage` if the user asks to explain what a message means.
-- ONLY execute `sendSms` if the user explicitly asks to send an SMS or text message.
-- ONLY execute `describeScreen` when the user asks about visible screen content or when screen sharing is active.
-- ONLY execute `openApp` if the user explicitly uses an open/launch verb (e.g. "Open YouTube", "WhatsApp kholo", "Instagram kholo", "Settings kholo", "Phone kholo").
-- When asked to open an app (e.g. "WhatsApp kholo", "Instagram kholo", "YouTube kholo", "Settings kholo", "Phone kholo"), invoke `openApp` with appName set to the requested app.
-- AFTER a tool executes and returns a result:
-  * When `openApp` returns 'SUCCESS:', say in natural Hindi/Hinglish: '[App Name] khol diya!'.
-  * When `openApp` returns 'NOT_INSTALLED:', tell the user truthfully that the app is not installed, and suggest downloading it from Google Play Store. Do NOT say a technical problem occurred!
-  * When `searchAndCallContact` returns 'SUCCESS:', say that the dialer has been opened with the contact's number ready to call, or that the call is being placed.
-  * When `searchAndCallContact` returns 'AMBIGUOUS:', ask the user to clarify which matching contact they want to call.
-  * When `searchAndCallContact` returns 'NOT_FOUND:', inform the user truthfully that no contact by that name was found in phone contacts.
-  * When `sendWhatsAppMessage` returns 'SUCCESS:', say clearly: 'WhatsApp khul gaya hai aur message draft ho gaya hai. Bhejne ke liye Send button dabayein.' (Never claim message was already sent).
-  * When `sendWhatsAppMessage` returns 'NOT_INSTALLED:', tell the user that WhatsApp is not installed.
-  * When `sendSms` returns 'SUCCESS:', confirm that the SMS draft has been prepared or sent.
-  * When `describeScreen` returns, describe the screen's visual content conversationally in Hindi/Hinglish.
-  * Never claim that an action succeeded when the tool returned a failure or permission denied.
-- DO NOT speak your internal plan before executing a tool. Execute tools in silence.
-- NEVER invent phone numbers. NEVER dial 121. If the user asks to call someone (e.g. 'Shivank', 'Rahul'), you MUST pass their EXACT contactName parameter into searchAndCallContact.
+PHONE TOOLS (SILENT & NATURAL):
+- Default to normal conversation. Greetings or casual talk ("Hello", "Hi", "Hey Rafel", "Hello Rahul", "Kya haal hai") NEVER call any tool—"Hello" never means "Call".
+- Only call tools on an explicit action verb: `searchAndCallContact` (call/phone lagao), `openApp` (open/kholo), `sendWhatsAppMessage` (WhatsApp bhejo), `composeMessage` (Instagram/Telegram/Messenger/Signal/SMS draft), `readRecentMessages` (messages/notifications padho), `explainMessage`, `sendSms`, `describeScreen` (screen dekho/batao).
+- Execute tools silently without announcing your plan. Never invent phone numbers or dial 121; always pass the exact spoken `contactName`.
+- After a tool returns, reply casually and truthfully like a friend in 1 short sentence:
+  * `openApp` SUCCESS -> "[App] khol diya!" | NOT_INSTALLED -> tell them it's not installed and they can grab it from Play Store (don't blame a technical error).
+  * `searchAndCallContact` SUCCESS -> casually confirm the dialer/call is up | AMBIGUOUS -> ask which contact | NOT_FOUND -> say you couldn't find that contact.
+  * `sendWhatsAppMessage` SUCCESS -> say WhatsApp khul gaya hai aur message ready hai, bas Send daba dena (never claim it's already sent) | NOT_INSTALLED -> say WhatsApp isn't installed.
+  * `sendSms` / `describeScreen` -> reply naturally and truthfully; never pretend a failed/denied action succeeded.
         """.trimIndent()
 
-        val memoryContext = com.example.conversation.RafelConversationManager.getInstance(context).formatPromptContext(limit = 14)
+        val memoryContext = com.example.conversation.RafelConversationManager.getInstance(context).formatVoiceHistoryContext(limit = 10)
         val finalSystemPrompt = if (memoryContext.isNotBlank()) {
             "$systemPrompt\n\n$memoryContext"
         } else {
@@ -845,8 +856,17 @@ CRITICAL COMPREHENSION & INTENT RULES:
             putJsonObject("setup") {
                 put("model", activeModelInUse)
                 putJsonObject("generationConfig") {
-                    put("temperature", 0.85)
+                    put("temperature", 0.95)
+                    if (!useMinimalSetupFallback) {
+                        put("topP", 0.95)
+                    }
                     putJsonArray("responseModalities") { add("AUDIO") }
+                    if (!useMinimalSetupFallback && activeModelInUse.contains("2.5")) {
+                        // Disable hidden reasoning latency on Gemini 2.5 Native Audio for instant voice replies
+                        putJsonObject("thinkingConfig") {
+                            put("thinkingBudget", 0)
+                        }
+                    }
                     putJsonObject("speechConfig") {
                         putJsonObject("voiceConfig") {
                             putJsonObject("prebuiltVoiceConfig") {
@@ -854,6 +874,19 @@ CRITICAL COMPREHENSION & INTENT RULES:
                             }
                         }
                     }
+                }
+                if (!useMinimalSetupFallback) {
+                    putJsonObject("realtimeInputConfig") {
+                        putJsonObject("automaticActivityDetection") {
+                            put("disabled", false)
+                            put("startOfSpeechSensitivity", "START_SENSITIVITY_HIGH")
+                            put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
+                            put("prefixPaddingMs", 80)
+                            put("silenceDurationMs", 220)
+                        }
+                    }
+                    putJsonObject("inputAudioTranscription") {}
+                    putJsonObject("outputAudioTranscription") {}
                 }
                 putJsonObject("systemInstruction") {
                     putJsonArray("parts") {
@@ -1133,6 +1166,7 @@ CRITICAL COMPREHENSION & INTENT RULES:
                     )
                     if (modelTurnInProgress.compareAndSet(false, true)) {
                         currentTurnAssistantText.clear()
+                        currentTurnOutputTranscript.clear()
                         forceNewUiAssistantLine = true
                         com.example.conversation.RafelConversationManager.getInstance(context).startNewAssistantVoiceTurn()
                         val reqStart = turnRequestSentTimeMs.get()
@@ -1193,7 +1227,7 @@ CRITICAL COMPREHENSION & INTENT RULES:
 
                     if (part.containsKey("text")) {
                         val textContent = part["text"]?.jsonPrimitive?.content
-                        if (!textContent.isNullOrBlank()) {
+                        if (!textContent.isNullOrBlank() && currentTurnOutputTranscript.isEmpty()) {
                             val cleanPart = textContent.trim()
                             val existingTurnText = currentTurnAssistantText.toString().trim()
                             if (!existingTurnText.endsWith(cleanPart, ignoreCase = true)) {
@@ -1209,6 +1243,18 @@ CRITICAL COMPREHENSION & INTENT RULES:
                     }
                 }
 
+                // Parse output audio transcription from Gemini 2.5 Native Audio (syncs spoken replies to chat + avatar emotion)
+                val outputTransObj = serverContent["outputTranscription"]?.jsonObject
+                    ?: serverContent["output_transcription"]?.jsonObject
+                val outDelta = outputTransObj?.get("text")?.jsonPrimitive?.content
+                if (!outDelta.isNullOrEmpty()) {
+                    currentTurnOutputTranscript.append(outDelta)
+                    val fullOutText = currentTurnOutputTranscript.toString()
+                    currentTurnAssistantText.clear()
+                    currentTurnAssistantText.append(fullOutText.trim())
+                    updateAssistantOutputTranscript(fullOutText, persistToDb = false)
+                }
+
                 val isTurnComplete = serverContent.get("turnComplete")?.jsonPrimitive?.content == "true" ||
                         serverContent.get("turnComplete")?.jsonPrimitive?.booleanOrNull == true ||
                         serverContent.get("turn_complete")?.jsonPrimitive?.content == "true" ||
@@ -1219,6 +1265,9 @@ CRITICAL COMPREHENSION & INTENT RULES:
                         jsonMsg.get("turnComplete")?.jsonPrimitive?.booleanOrNull == true
 
                 if (isTurnComplete) {
+                    if (currentTurnOutputTranscript.isNotEmpty()) {
+                        updateAssistantOutputTranscript(currentTurnOutputTranscript.toString(), persistToDb = true)
+                    }
                     val genId = currentGenerationId.get()
                     val totalChunks = modelTurnChunkCount.get()
                     val totalBytes = modelTurnTotalAudioBytes.get()
@@ -1365,6 +1414,7 @@ CRITICAL COMPREHENSION & INTENT RULES:
     @Volatile private var liveInputTranscript: String? = null
     @Volatile private var debugSttError: String? = null
     @Volatile private var currentTurnAssistantText = StringBuilder()
+    @Volatile private var currentTurnOutputTranscript = StringBuilder()
     private val currentTurnPcmBuffer = ByteArrayOutputStream()
     @Volatile private var lastTurnDurationMs: Long = 0L
     @Volatile private var lastTurnPcmBytes: Long = 0L
@@ -1530,6 +1580,7 @@ CRITICAL COMPREHENSION & INTENT RULES:
         lastToolArgs = null
         lastToolResult = null
         currentTurnAssistantText.clear()
+        currentTurnOutputTranscript.clear()
         synchronized(currentTurnPcmBuffer) {
             currentTurnPcmBuffer.reset()
         }
@@ -1646,6 +1697,7 @@ CRITICAL COMPREHENSION & INTENT RULES:
         modelTurnTotalAudioBytes.set(0L)
         modelTurnInProgress.set(false)
         currentTurnAssistantText.clear()
+        currentTurnOutputTranscript.clear()
         forceNewUiAssistantLine = true
         com.example.conversation.RafelConversationManager.getInstance(context).startNewAssistantVoiceTurn()
         turnRequestSentTimeMs.set(System.currentTimeMillis())
@@ -1697,17 +1749,11 @@ CRITICAL COMPREHENSION & INTENT RULES:
             currentTurnPcmBuffer.write(byteArray)
         }
 
-        currentTurnDigest.update(byteArray)
         currentTurnChunkCount++
-        val chunkDigest = java.security.MessageDigest.getInstance("SHA-256")
-        chunkDigest.update(byteArray)
-        val chunkHash = chunkDigest.digest().take(6).joinToString("") { "%02x".format(it) }
-        val isDuplicate = !sentChunkHashes.add(chunkHash)
 
         val base64Data = Base64.encodeToString(byteArray, Base64.NO_WRAP)
         val jsonString = "{\"realtimeInput\":{\"audio\":{\"mimeType\":\"audio/pcm;rate=16000\",\"data\":\"$base64Data\"}}}"
         RafelLiveDiagnostics.inputPcmBytesSent.value += byteArray.size
-        android.util.Log.i("RAFEL-EVIDENCE", "realtimeInput sent: chunk #$currentTurnChunkCount, bytes=${byteArray.size}, hash=$chunkHash, duplicate=$isDuplicate")
         ws.send(jsonString)
     }
 
@@ -1769,34 +1815,13 @@ CRITICAL COMPREHENSION & INTENT RULES:
         val bytesSent = activeTurnAudioBytes
         val turnId = currentTurn?.turnId ?: "turn_${System.currentTimeMillis()}"
         val genId = currentGenerationId.get()
-        val fullHash = try {
-            currentTurnDigest.digest().joinToString("") { "%02x".format(it) }
-        } catch (_: Exception) { "none" }
-
         lastTurnId = turnId
         lastTurnDurationMs = duration
         lastTurnPcmBytes = bytesSent
 
-        val pcmSnapshot = synchronized(currentTurnPcmBuffer) {
-            currentTurnPcmBuffer.toByteArray()
-        }
-        triggerDebugStt(pcmSnapshot)
-
-        android.util.Log.i("RAFEL-PIPE", "3. EXACT_AUDIO_BYTES_SENT: $bytesSent bytes")
-        android.util.Log.i("RAFEL-PIPE", "4. USER_TURN_SENT (model=$activeModelInUse, endpoint=v1beta.GenerativeService.BidiGenerateContent, sessionId=${currentSessionId.get()})")
-
-        android.util.Log.i("RAFEL-DEBUG", "=== RAW USER TURN DEBUG ===")
-        android.util.Log.i("RAFEL-DEBUG", "TURN ID: $turnId")
-        android.util.Log.i("RAFEL-DEBUG", "GENERATION ID: $genId")
-        android.util.Log.i("RAFEL-DEBUG", "PCM BYTES: $bytesSent")
-        android.util.Log.i("RAFEL-DEBUG", "AUDIO DURATION: ${duration}ms")
-        android.util.Log.i("RAFEL-DEBUG", "SAMPLE RATE: 16000Hz")
-        android.util.Log.i("RAFEL-DEBUG", "CHANNELS: 1 (MONO)")
-        android.util.Log.i("RAFEL-DEBUG", "AUDIO PAYLOAD BYTES: $bytesSent")
-        android.util.Log.i("RAFEL-DEBUG", "PCM SHA-256: $fullHash")
-        android.util.Log.i("RAFEL-DEBUG", "TOTAL CHUNKS SENT: $currentTurnChunkCount")
-        android.util.Log.i("RAFEL-DEBUG", "TURN COMPLETE SENT: YES")
-        android.util.Log.i("RAFEL-DEBUG", "GEMINI RESPONSE RECEIVED: PENDING")
+        // Immediately signal audioStreamEnd so Gemini Live flushes its audio buffer
+        // and starts streaming Aoede's response right away instead of waiting for a silence timeout.
+        ws.send("{\"realtimeInput\":{\"audioStreamEnd\":true}}")
 
         // Reset turn state and record turn send timestamp for TTFR & TTFA measurement
         turnRequestSentTimeMs.set(System.currentTimeMillis())
@@ -1808,8 +1833,8 @@ CRITICAL COMPREHENSION & INTENT RULES:
 
         RafelLogger.trackTurnCompleteSent()
         RafelLogger.trace3UserTurnSent()
-        RafelLogger.logLive("user audio sent, awaiting server VAD model turn")
-        RafelLogger.logDiagnostic("[LIVE] user audio complete, awaiting model turn")
+        RafelLogger.logLive("user audio sent + audioStreamEnd flushed, awaiting model turn")
+        RafelLogger.logDiagnostic("[LIVE] audioStreamEnd sent, awaiting model turn")
         android.util.Log.i("RAFEL-DIAGNOSTIC", "MIC_AUDIO_SENT: bytes=$bytesSent, duration=${duration}ms, chunks=$currentTurnChunkCount, turnId=$turnId")
         android.util.Log.i("RAFEL-TURN", "[TURN] USER_TURN_AUDIO_STREAMED")
         android.util.Log.i("RAFEL-LIVE", "[LIVE] WAITING_FOR_MODEL_RESPONSE")
@@ -1899,6 +1924,25 @@ CRITICAL COMPREHENSION & INTENT RULES:
             _rafelState.value = newState
             RafelLogger.logVoiceState(oldState, newState)
             onStateChange(newState)
+        }
+    }
+
+    private fun updateAssistantOutputTranscript(fullRawText: String, persistToDb: Boolean) {
+        val sanitized = com.example.ai.PersonaSettings.deduplicateSentencesInTurn(
+            com.example.voice.VoiceBehaviorSettings.sanitizeForNaturalDelivery(fullRawText)
+        ).trim()
+        if (sanitized.isBlank()) return
+        com.example.conversation.RafelConversationManager.getInstance(context)
+            .updateRafelVoiceTranscript(sanitized, persistToDb = persistToDb)
+        val current = _messages.value
+        val last = current.lastOrNull()
+        if (!forceNewUiAssistantLine && last != null && last.startsWith("Rafel: ")) {
+            val updated = current.toMutableList()
+            updated[updated.lastIndex] = "Rafel: $sanitized"
+            _messages.value = updated
+        } else {
+            forceNewUiAssistantLine = false
+            addMessage("Rafel: $sanitized")
         }
     }
 

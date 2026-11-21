@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
+import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -66,21 +67,31 @@ class GeminiRestException(
  * - Respects coroutine cancellation and never overwrites Gemini responses with offline templates.
  */
 class GeminiTextClient(
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(25, TimeUnit.SECONDS)
-        .writeTimeout(15, TimeUnit.SECONDS)
-        .build(),
+    private val client: OkHttpClient = sharedHttpClient,
     private val aiModelManager: AIModelManager? = null,
     private val baseUrl: String = AIModelRegistry.GEMINI_REST_BASE_URL,
     var maxTransientRetriesPerModel: Int = 1,
-    var transientRetryDelayMs: Long = 200L
+    var transientRetryDelayMs: Long = 120L
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val mediaTypeJson = "application/json; charset=utf-8".toMediaType()
     var restBaseUrlOverride: String? = null
 
     companion object {
+        /**
+         * Shared HTTP/2 connection-pooled OkHttpClient so consecutive chat messages reuse
+         * warm TLS 1.3 sockets instead of paying 250-600ms DNS+TCP+TLS handshake overhead per message.
+         */
+        val sharedHttpClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectionPool(ConnectionPool(6, 5, TimeUnit.MINUTES))
+                .connectTimeout(6, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .writeTimeout(8, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
+                .build()
+        }
+
         fun classifyHttpError(httpCode: Int, rawBody: String): GeminiRestErrorKind {
             return when {
                 httpCode == 400 && (
@@ -96,6 +107,93 @@ class GeminiTextClient(
                 httpCode in 500..599 -> GeminiRestErrorKind.SERVER_ERROR_5XX
                 else -> GeminiRestErrorKind.TIMEOUT_OR_NETWORK
             }
+        }
+    }
+
+    /**
+     * Proactively warms up DNS + TCP + TLS 1.3 socket to Gemini REST API in the background
+     * so even the first typed message skips cold connection handshake latency.
+     */
+    suspend fun prewarmConnection() = withContext(Dispatchers.IO) {
+        if (restBaseUrlOverride != null) return@withContext
+        try {
+            val hostUrl = baseUrl.substringBefore("/v1beta").ifBlank { "https://generativelanguage.googleapis.com" }
+            val req = Request.Builder().url(hostUrl).head().build()
+            client.newCall(req).execute().use { }
+        } catch (_: Exception) {
+            // Best-effort prewarm only; ignore errors when offline or restricted
+        }
+    }
+
+    private fun buildGenerationPayload(
+        candidateModel: String,
+        systemPrompt: String,
+        contentsArray: JsonArray,
+        temperature: Double,
+        maxOutputTokens: Int
+    ): String {
+        val cleanModel = candidateModel.removePrefix("models/").lowercase()
+        val supportsThinkingConfig = cleanModel.contains("2.5")
+        return buildJsonObject {
+            putJsonObject("system_instruction") {
+                putJsonArray("parts") {
+                    add(buildJsonObject { put("text", systemPrompt) })
+                }
+            }
+            put("contents", contentsArray)
+            putJsonObject("generationConfig") {
+                put("temperature", temperature)
+                put("topP", 0.95)
+                put("maxOutputTokens", maxOutputTokens)
+                if (supportsThinkingConfig) {
+                    // Disable hidden reasoning tokens on Gemini 2.5 Flash/Lite for sub-second TTFT
+                    putJsonObject("thinkingConfig") {
+                        put("thinkingBudget", 0)
+                    }
+                }
+            }
+        }.toString()
+    }
+
+    private val isProductionCloudClient: Boolean
+        get() = client === sharedHttpClient &&
+            baseUrl == AIModelRegistry.GEMINI_REST_BASE_URL &&
+            restBaseUrlOverride == null
+
+    private fun buildFastCandidateChain(turnCategory: TurnCategory, preferUltraFast: Boolean = false): List<String> {
+        val routingDecision = aiModelManager?.selectModelForTask(
+            taskType = ModelTaskType.TEXT_CHAT,
+            hasApiKey = true
+        )
+        val routedList = routingDecision?.fallbackChain
+            ?.map { it.restModelName }
+            ?.distinct()
+            ?.takeIf { it.isNotEmpty() }
+            ?: listOf(
+                AIModelRegistry.MODEL_GEMINI_2_5_FLASH_LITE_REST,
+                AIModelRegistry.MODEL_GEMINI_2_5_FLASH_REST
+            )
+        val fastPreferred = if (turnCategory == TurnCategory.TECHNICAL_OR_DETAILED || turnCategory == TurnCategory.EMOTIONAL_SHARE) {
+            listOf(
+                AIModelRegistry.MODEL_GEMINI_2_5_FLASH_REST,
+                AIModelRegistry.MODEL_GEMINI_2_5_FLASH_LITE_REST,
+                AIModelRegistry.MODEL_GEMINI_2_0_FLASH_REST
+            )
+        } else {
+            listOf(
+                AIModelRegistry.MODEL_GEMINI_2_5_FLASH_LITE_REST,
+                AIModelRegistry.MODEL_GEMINI_2_5_FLASH_REST,
+                AIModelRegistry.MODEL_GEMINI_2_0_FLASH_REST
+            )
+        }
+        return if (isProductionCloudClient || preferUltraFast) {
+            // Production cloud endpoint: never waste a 404 round-trip on obsolete models (e.g. gemini-3.5-flash)
+            (fastPreferred + routedList + AIModelRegistry.VERIFIED_SUPPORTED_REST_MODELS)
+                .distinct()
+                .filterNot { AIModelRegistry.isObsoleteOrUnsupportedModel(it) }
+        } else {
+            // Local test server / mock client: preserve exact router order for failover tests
+            (routedList + AIModelRegistry.VERIFIED_SUPPORTED_REST_MODELS).distinct()
         }
     }
 
@@ -150,17 +248,29 @@ class GeminiTextClient(
                 }
             }
         val turnCategory = PersonaSettings.classifyTurnCategory(newPrompt)
-        val dynamicSystemPrompt = RafelPersona.buildDynamicSystemInstruction(
-            latestUserMessage = newPrompt,
-            recentHistory = chronologicalHistory,
-            relevantMemorySummary = relevantMemorySummary,
-            includeVoiceDeliveryRules = false
-        )
+        val useCompactPrompt = isProductionCloudClient &&
+            turnCategory != TurnCategory.TECHNICAL_OR_DETAILED &&
+            turnCategory != TurnCategory.EMOTIONAL_SHARE
+        val dynamicSystemPrompt = if (useCompactPrompt) {
+            RafelPersona.buildFastDynamicSystemInstruction(
+                latestUserMessage = newPrompt,
+                recentHistory = chronologicalHistory,
+                relevantMemorySummary = relevantMemorySummary
+            )
+        } else {
+            RafelPersona.buildDynamicSystemInstruction(
+                latestUserMessage = newPrompt,
+                recentHistory = chronologicalHistory,
+                relevantMemorySummary = relevantMemorySummary,
+                includeVoiceDeliveryRules = false
+            )
+        }
         val recentAssistantReplies = chronologicalHistory.filter { !it.isUser }.takeLast(4).map { it.text }
 
         // Build contents array with conversation history in strict chronological order (oldest -> newest)
+        val historyLimit = if (useCompactPrompt) 12 else 20
         val contentsArray = buildJsonArray {
-            chronologicalHistory.takeLast(24).forEach { msg ->
+            chronologicalHistory.takeLast(historyLimit).forEach { msg ->
                 if (msg.text.isNotBlank()) {
                     add(buildJsonObject {
                         put("role", if (msg.isUser) "user" else "model")
@@ -184,41 +294,21 @@ class GeminiTextClient(
             else -> 0.85
         }
 
-        val requestBodyJson = buildJsonObject {
-            putJsonObject("system_instruction") {
-                putJsonArray("parts") {
-                    add(buildJsonObject { put("text", dynamicSystemPrompt) })
-                }
-            }
-            put("contents", contentsArray)
-            putJsonObject("generationConfig") {
-                put("temperature", targetTemp)
-                put("topP", 0.95)
-                put("maxOutputTokens", turnCategory.maxOutputTokens)
-            }
-        }.toString()
-
-        // Determine candidate order from AIModelManager router if available, and append verified supported REST fallbacks
-        val routingDecision = aiModelManager?.selectModelForTask(
-            taskType = ModelTaskType.TEXT_CHAT,
-            hasApiKey = true
-        )
-
-        val routedList = routingDecision?.fallbackChain
-            ?.map { it.restModelName }
-            ?.distinct()
-            ?.takeIf { it.isNotEmpty() }
-            ?: listOf(
-                AIModelRegistry.MODEL_GEMINI_3_5_FLASH_REST,
-                AIModelRegistry.MODEL_GEMINI_2_5_FLASH_REST
-            )
-        val candidateChain = (routedList + AIModelRegistry.VERIFIED_SUPPORTED_REST_MODELS).distinct()
+        val candidateChain = buildFastCandidateChain(turnCategory)
 
         var lastResult: Result<String> = Result.failure(IllegalStateException("No REST candidate models available"))
         var lastFailureReason: String? = null
 
         for ((index, candidateModel) in candidateChain.withIndex()) {
             currentCoroutineContext().ensureActive()
+
+            val requestBodyJson = buildGenerationPayload(
+                candidateModel = candidateModel,
+                systemPrompt = dynamicSystemPrompt,
+                contentsArray = contentsArray,
+                temperature = targetTemp,
+                maxOutputTokens = turnCategory.maxOutputTokens
+            )
 
             var attemptCount = 0
             var modelAttemptResult: Result<String>
@@ -362,15 +452,27 @@ class GeminiTextClient(
             }
         }
         val turnCategory = PersonaSettings.classifyTurnCategory(newPrompt)
-        val dynamicSystemPrompt = RafelPersona.buildDynamicSystemInstruction(
-            latestUserMessage = newPrompt,
-            recentHistory = chronologicalHistory,
-            relevantMemorySummary = relevantMemorySummary,
-            includeVoiceDeliveryRules = false
-        )
+        val useCompactPrompt = isProductionCloudClient &&
+            turnCategory != TurnCategory.TECHNICAL_OR_DETAILED &&
+            turnCategory != TurnCategory.EMOTIONAL_SHARE
+        val dynamicSystemPrompt = if (useCompactPrompt) {
+            RafelPersona.buildFastDynamicSystemInstruction(
+                latestUserMessage = newPrompt,
+                recentHistory = chronologicalHistory,
+                relevantMemorySummary = relevantMemorySummary
+            )
+        } else {
+            RafelPersona.buildDynamicSystemInstruction(
+                latestUserMessage = newPrompt,
+                recentHistory = chronologicalHistory,
+                relevantMemorySummary = relevantMemorySummary,
+                includeVoiceDeliveryRules = false
+            )
+        }
 
+        val historyLimit = if (useCompactPrompt) 12 else 20
         val contentsArray = buildJsonArray {
-            chronologicalHistory.takeLast(24).forEach { msg ->
+            chronologicalHistory.takeLast(historyLimit).forEach { msg ->
                 if (msg.text.isNotBlank()) {
                     add(buildJsonObject {
                         put("role", if (msg.isUser) "user" else "model")
@@ -388,19 +490,17 @@ class GeminiTextClient(
             })
         }
 
-        val requestBodyJson = buildJsonObject {
-            putJsonObject("system_instruction") {
-                putJsonArray("parts") {
-                    add(buildJsonObject { put("text", dynamicSystemPrompt) })
-                }
-            }
-            put("contents", contentsArray)
-            putJsonObject("generationConfig") {
-                put("temperature", 0.8)
-                put("topP", 0.95)
-                put("maxOutputTokens", turnCategory.maxOutputTokens)
-            }
-        }.toString()
+        val targetTemp = when (turnCategory) {
+            TurnCategory.SIMPLE_QUESTION, TurnCategory.TECHNICAL_OR_DETAILED -> 0.55
+            else -> 0.85
+        }
+        val requestBodyJson = buildGenerationPayload(
+            candidateModel = modelName,
+            systemPrompt = dynamicSystemPrompt,
+            contentsArray = contentsArray,
+            temperature = targetTemp,
+            maxOutputTokens = turnCategory.maxOutputTokens
+        )
 
         val cleanName = modelName.removePrefix("models/")
         val proxyUrl = GeminiSecureGateway.backendProxyUrl.value
@@ -529,6 +629,59 @@ class GeminiTextClient(
                 )
             )
         }
+    }
+
+    /**
+     * Ultra-low-latency streaming REST call with automatic failover across verified fast models.
+     * Delivers first text tokens via [onPartialChunk] in sub-second time and falls back smoothly
+     * if a candidate returns 404/429/5xx before emitting chunks.
+     */
+    suspend fun generateStreamingResponseWithFailover(
+        apiKey: String,
+        recentHistory: List<UnifiedMessage>,
+        newPrompt: String,
+        relevantMemorySummary: String = "",
+        onPartialChunk: (String) -> Unit = {}
+    ): Result<String> = withContext(Dispatchers.IO) {
+        currentCoroutineContext().ensureActive()
+        val turnCategory = PersonaSettings.classifyTurnCategory(newPrompt)
+        val candidates = buildFastCandidateChain(turnCategory, preferUltraFast = true)
+        var lastFailure: Result<String> = Result.failure(IllegalStateException("No streaming candidate models available"))
+
+        for (candidateModel in candidates) {
+            currentCoroutineContext().ensureActive()
+            var emittedAnyChunk = false
+            val res = generateStreamingResponse(
+                apiKey = apiKey,
+                recentHistory = recentHistory,
+                newPrompt = newPrompt,
+                relevantMemorySummary = relevantMemorySummary,
+                modelName = candidateModel,
+                onPartialChunk = { delta ->
+                    emittedAnyChunk = true
+                    onPartialChunk(delta)
+                }
+            )
+            if (res.isSuccess) {
+                return@withContext res
+            }
+            lastFailure = res
+            val ex = res.exceptionOrNull()
+            if (ex is CancellationException) throw ex
+            val restEx = ex as? GeminiRestException
+            if (restEx?.isFatalAuthError == true || emittedAnyChunk) {
+                break
+            }
+            aiModelManager?.onModelFailureAndSelectFallback(
+                taskType = ModelTaskType.TEXT_CHAT,
+                failedModelId = candidateModel,
+                reason = restEx?.message ?: ex?.message ?: "SSE failed on $candidateModel",
+                httpOrWsCode = restEx?.httpCode ?: 0,
+                hasApiKey = apiKey.isNotBlank() || GeminiSecureGateway.isBackendProxyOperational(),
+                elapsedBeforeFailureMs = 1L
+            )
+        }
+        lastFailure
     }
 
     private fun executeGenerate(

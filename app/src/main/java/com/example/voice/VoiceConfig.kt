@@ -28,9 +28,9 @@ object VoiceConfig {
     // Prevents chunk drops during multi-sentence Gemini generation bursts while strictly bounding memory.
     const val MAX_AUDIO_QUEUE_SIZE = 1024
 
-    // Continuous AudioTrack internal hardware buffer capacity (38400 bytes = 800ms)
-    // Absorbs network packet jitter without blocking write() or causing audio underrun.
-    const val AUDIOTRACK_BUFFER_BYTES = 38400
+    // Continuous AudioTrack internal hardware buffer capacity (14400 bytes = 300ms)
+    // Low latency onset while still absorbing network packet jitter without underrun.
+    const val AUDIOTRACK_BUFFER_BYTES = 14400
 
     // Natural Conversational VAD Parameters
     // RMS threshold for speech detection (16-bit PCM amplitude scale ~ 0 to 32767)
@@ -46,20 +46,20 @@ object VoiceConfig {
     // Minimum consecutive chunks required to trigger barge-in during AI speech (2 chunks = 80ms)
     const val VAD_MIN_BARGE_IN_CHUNKS = 2
 
-    // Post-playback echo suppression window (350ms) to prevent loudspeaker reverb tail
-    // from being misinterpreted as user speech immediately after Rafel finishes speaking
-    const val POST_AI_SPEECH_ECHO_GUARD_MS = 350L
+    // Post-playback echo suppression window (220ms) to prevent loudspeaker reverb tail
+    // from being misinterpreted as user speech while allowing snappy conversational turns
+    const val POST_AI_SPEECH_ECHO_GUARD_MS = 220L
 
-    // Natural Conversational End-of-Speech silence timeout (500–700ms range):
-    // Prevents premature cutting when user pauses briefly between words or thoughts
-    const val END_SILENCE_SHORT_UTTERANCE_MS = 650L
-    const val END_SILENCE_NORMAL_MS = 600L
+    // Ultra-Fast Conversational End-of-Speech silence timeout (320-380ms):
+    // Delivers sub-1-second turnaround while avoiding mid-word clipping
+    const val END_SILENCE_SHORT_UTTERANCE_MS = 380L
+    const val END_SILENCE_NORMAL_MS = 320L
 
-    // Pre-buffer duration to capture starting consonants (~240ms = 6 chunks of 40ms)
-    const val PRE_BUFFER_CHUNKS = 6
+    // Pre-buffer duration to capture starting consonants (~160ms = 4 chunks of 40ms)
+    const val PRE_BUFFER_CHUNKS = 4
 
-    // Post-buffer duration to retain trailing speech and word endings (~160ms = 4 chunks of 40ms)
-    const val POST_BUFFER_CHUNKS = 4
+    // Post-buffer duration to retain trailing speech and word endings (~80ms = 2 chunks of 40ms)
+    const val POST_BUFFER_CHUNKS = 2
 
     // Maximum utterance safeguard (25 seconds)
     const val VAD_MAX_UTTERANCE_MS = 25000L

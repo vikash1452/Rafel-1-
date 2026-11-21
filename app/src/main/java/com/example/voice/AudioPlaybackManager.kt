@@ -229,8 +229,8 @@ class AudioPlaybackManager(
         val startTime = System.currentTimeMillis()
         val head = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
         val remainingFrames = (targetFrames - head).coerceAtLeast(0L)
-        val expectedMs = (remainingFrames * 1000L / VoiceConfig.SAMPLE_RATE_OUT) + 60L
-        val maxWaitMs = expectedMs.coerceIn(40L, 3500L)
+        val expectedMs = (remainingFrames * 1000L / VoiceConfig.SAMPLE_RATE_OUT) + 30L
+        val maxWaitMs = expectedMs.coerceIn(25L, 3500L)
 
         while (isLoopRunning.get() && (System.currentTimeMillis() - startTime < maxWaitMs)) {
             if (genId <= lastCancelledGenerationId.get() && lastCancelledGenerationId.get() > 0L) {
@@ -240,7 +240,7 @@ class AudioPlaybackManager(
             if (currentHead >= targetFrames) {
                 break
             }
-            try { Thread.sleep(15) } catch (_: InterruptedException) { break }
+            try { Thread.sleep(8) } catch (_: InterruptedException) { break }
         }
     }
 
@@ -269,12 +269,15 @@ class AudioPlaybackManager(
                 .setEncoding(VoiceConfig.AUDIO_FORMAT)
                 .build()
 
-            val track = AudioTrack.Builder()
+            val builder = AudioTrack.Builder()
                 .setAudioAttributes(attributes)
                 .setAudioFormat(format)
                 .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            }
+            val track = builder.build()
 
             if (track.state == AudioTrack.STATE_INITIALIZED) track else {
                 track.release()

@@ -151,7 +151,7 @@ class VoiceBehaviorTest {
 
         val elapsedSilence = System.currentTimeMillis() - silenceStart
         assertTrue("Speech end must be triggered", speechEnded)
-        assertTrue("Speech end must trigger in 500-800ms window (actual: ${elapsedSilence}ms)", elapsedSilence in 500..850)
+        assertTrue("Speech end must trigger promptly in 280-650ms window (actual: ${elapsedSilence}ms)", elapsedSilence in 280..650)
     }
 
     @Test

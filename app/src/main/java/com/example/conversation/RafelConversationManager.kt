@@ -45,8 +45,11 @@ class RafelConversationManager private constructor(private val appContext: Conte
     val aiModelManager: com.example.ai.router.AIModelManager
         get() = com.example.ai.router.AIModelManager.getInstance(appContext)
     var geminiTextClientOverride: GeminiTextClient? = null
+    private val defaultTextClient: GeminiTextClient by lazy {
+        GeminiTextClient(aiModelManager = aiModelManager)
+    }
     private fun resolveTextClient(): GeminiTextClient =
-        geminiTextClientOverride ?: GeminiTextClient(aiModelManager = aiModelManager)
+        geminiTextClientOverride ?: defaultTextClient
 
     private val _messages = MutableStateFlow<List<UnifiedMessage>>(emptyList())
     val messages: StateFlow<List<UnifiedMessage>> = _messages.asStateFlow()
@@ -56,6 +59,9 @@ class RafelConversationManager private constructor(private val appContext: Conte
 
     init {
         loadHistoryFromDatabase()
+        scope.launch {
+            defaultTextClient.prewarmConnection()
+        }
     }
 
     private fun loadHistoryFromDatabase() {
@@ -181,6 +187,42 @@ class RafelConversationManager private constructor(private val appContext: Conte
         }
     }
 
+    /**
+     * Replaces or creates the active RAFEL_VOICE bubble with the full accumulated transcript
+     * from Gemini Live outputAudioTranscription so word-level deltas never split words or duplicate text.
+     * Set persistToDb = true on turnComplete to save the finalized spoken sentence to Room history.
+     */
+    fun updateRafelVoiceTranscript(fullTurnText: String, persistToDb: Boolean = false) {
+        val clean = PersonaSettings.deduplicateSentencesInTurn(
+            VoiceBehaviorSettings.sanitizeForNaturalDelivery(fullTurnText)
+        ).trim()
+        if (clean.isBlank()) return
+
+        val current = _messages.value
+        val last = current.lastOrNull()
+        val now = System.currentTimeMillis()
+        if (!forceNewAssistantVoiceBubble && last != null && last.type == UnifiedMessageType.RAFEL_VOICE) {
+            val updated = current.toMutableList()
+            updated[updated.lastIndex] = last.copy(text = clean)
+            _messages.value = updated
+            if (persistToDb) {
+                persistTurn("assistant", clean, "RAFEL_VOICE", now)
+            }
+        } else {
+            forceNewAssistantVoiceBubble = false
+            val msg = UnifiedMessage(
+                id = UUID.randomUUID().toString(),
+                type = UnifiedMessageType.RAFEL_VOICE,
+                text = clean,
+                timestamp = now
+            )
+            appendMessage(msg)
+            if (persistToDb) {
+                persistTurn("assistant", clean, "RAFEL_VOICE", now)
+            }
+        }
+    }
+
     fun addUserTextMessage(text: String): UnifiedMessage {
         val clean = text.trim()
         memoryManager.observeUserUtterance(clean)
@@ -264,16 +306,83 @@ class RafelConversationManager private constructor(private val appContext: Conte
                     history.takeLast(2).joinToString(" ") { it.text }
                 }
                 val relevantMemPrompt = memoryManager.formatRelevantMemoryPrompt(clean, recentTopic)
-                val responseResult = resolveTextClient().generateResponse(
-                    apiKey = effectiveKey,
-                    recentHistory = history,
-                    newPrompt = clean,
-                    relevantMemorySummary = relevantMemPrompt
-                )
+                val textClient = resolveTextClient()
+                val streamingMsgId = UUID.randomUUID().toString()
+                val streamBuffer = StringBuilder()
+                var streamingBubbleCreated = false
+
+                val responseResult = if (geminiTextClientOverride == null &&
+                    manager.cloudInferenceEnabled.value &&
+                    manager.healthMonitor.isOnline.value &&
+                    (effectiveKey.isNotBlank() || com.example.ai.security.GeminiSecureGateway.isBackendProxyOperational())
+                ) {
+                    val sseResult = textClient.generateStreamingResponseWithFailover(
+                        apiKey = effectiveKey,
+                        recentHistory = history,
+                        newPrompt = clean,
+                        relevantMemorySummary = relevantMemPrompt,
+                        onPartialChunk = { delta ->
+                            if (delta.isNotEmpty()) {
+                                streamBuffer.append(delta)
+                                val currentDraft = VoiceBehaviorSettings.sanitizeForNaturalDelivery(streamBuffer.toString())
+                                if (currentDraft.isNotBlank()) {
+                                    if (!streamingBubbleCreated) {
+                                        streamingBubbleCreated = true
+                                        _isThinking.value = false
+                                        appendMessage(
+                                            UnifiedMessage(
+                                                id = streamingMsgId,
+                                                type = UnifiedMessageType.RAFEL_TEXT,
+                                                text = currentDraft,
+                                                timestamp = System.currentTimeMillis()
+                                            )
+                                        )
+                                    } else {
+                                        updateMessageTextById(streamingMsgId, currentDraft)
+                                    }
+                                }
+                            }
+                        }
+                    )
+                    if (sseResult.isSuccess || streamingBubbleCreated) {
+                        sseResult
+                    } else {
+                        // Graceful non-streaming fallback if SSE stream fails before first token
+                        textClient.generateResponse(
+                            apiKey = effectiveKey,
+                            recentHistory = history,
+                            newPrompt = clean,
+                            relevantMemorySummary = relevantMemPrompt
+                        )
+                    }
+                } else {
+                    textClient.generateResponse(
+                        apiKey = effectiveKey,
+                        recentHistory = history,
+                        newPrompt = clean,
+                        relevantMemorySummary = relevantMemPrompt
+                    )
+                }
 
                 if (responseResult.isSuccess) {
-                    val reply = responseResult.getOrNull().orEmpty()
-                    addRafelTextMessage(reply)
+                    val rawReply = responseResult.getOrNull().orEmpty()
+                    if (streamingBubbleCreated) {
+                        val recentAssistant = history.filter { !it.isUser }.takeLast(4).map { it.text }
+                        val finalClean = PersonaSettings.postProcessResponse(
+                            rawResponse = VoiceBehaviorSettings.sanitizeForNaturalDelivery(rawReply),
+                            userPrompt = clean,
+                            recentAssistantMessages = recentAssistant,
+                            recentHistory = history
+                        ).ifBlank { rawReply.trim() }
+                        updateMessageTextById(streamingMsgId, finalClean)
+                        persistTurn("assistant", finalClean, "RAFEL_TEXT", System.currentTimeMillis())
+                    } else {
+                        addRafelTextMessage(rawReply)
+                    }
+                } else if (streamingBubbleCreated && streamBuffer.isNotBlank()) {
+                    val partialClean = VoiceBehaviorSettings.sanitizeForNaturalDelivery(streamBuffer.toString())
+                    updateMessageTextById(streamingMsgId, partialClean)
+                    persistTurn("assistant", partialClean, "RAFEL_TEXT", System.currentTimeMillis())
                 } else {
                     val fallbackReason = when {
                         !manager.cloudInferenceEnabled.value -> "Cloud inference explicitly disabled"
@@ -648,6 +757,34 @@ class RafelConversationManager private constructor(private val appContext: Conte
         return sb.toString()
     }
 
+    /**
+     * Lightweight chronological conversation + user-memory summary for Gemini Live voice setup.
+     * Keeps chat-to-voice continuity intact without injecting stale single-turn guidance or heavy rule walls
+     * that can make native audio models sound stiff or scripted.
+     */
+    fun formatVoiceHistoryContext(limit: Int = 10): String {
+        val recent = _messages.value.takeLast(limit)
+        val latestUserMsg = recent.lastOrNull { it.isUser }?.text.orEmpty()
+        val recentTopicText = recent.takeLast(3).joinToString(" ") { it.text }
+        val relevantMemories = memoryManager.formatRelevantMemoryPrompt(latestUserMsg, recentTopicText)
+
+        if (recent.isEmpty() && relevantMemories.isBlank()) return ""
+
+        val sb = StringBuilder()
+        if (recent.isNotEmpty()) {
+            sb.append("RECENT CHAT & VOICE HISTORY (remember naturally if referenced):\n")
+            recent.forEach { msg ->
+                val speaker = if (msg.isUser) "User" else "Rafel"
+                sb.append("$speaker: ${msg.text}\n")
+            }
+        }
+        if (relevantMemories.isNotBlank()) {
+            sb.append("KNOWN ABOUT USER (bring up only when it fits naturally): ")
+                .append(relevantMemories.take(300))
+        }
+        return sb.toString().trim()
+    }
+
     fun getDebugHistoryRedacted(limit: Int = 10): List<String> {
         val recent = _messages.value.takeLast(limit)
         return recent.map { msg ->
@@ -679,6 +816,16 @@ class RafelConversationManager private constructor(private val appContext: Conte
             current + msg
         }
         _messages.value = updated
+    }
+
+    private fun updateMessageTextById(id: String, newText: String) {
+        val current = _messages.value
+        val idx = current.indexOfLast { it.id == id }
+        if (idx >= 0) {
+            val updated = current.toMutableList()
+            updated[idx] = updated[idx].copy(text = newText)
+            _messages.value = updated
+        }
     }
 
     private fun persistTurn(role: String, text: String, messageType: String, timestamp: Long) {
