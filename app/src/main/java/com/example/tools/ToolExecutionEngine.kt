@@ -1,6 +1,7 @@
 package com.example.tools
 
 import android.content.Context
+import com.example.BuildConfig
 import com.example.phone.PhoneControlManager
 import com.example.screen.ScreenCaptureManager
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +20,9 @@ class ToolExecutionEngine(private val context: Context) {
         args: JsonObject,
         turnContext: UserTurnContext?
     ): String = withContext(Dispatchers.IO) {
-        android.util.Log.i("RAFEL_MESSAGE_TRACE", "Stage 1 & 2: Recognized tool function call: toolName=$name, turnTranscript=${turnContext?.transcript ?: "(no turn transcript)"}")
+        if (BuildConfig.DEBUG) {
+            android.util.Log.i("RAFEL_MESSAGE_TRACE", "Stage 1 & 2: Recognized tool function call: toolName=$name, turnTranscript=${turnContext?.transcript ?: "(no turn transcript)"}")
+        }
         try {
             val gateDecision = ToolSafetyGate.evaluate(name, args, turnContext)
             if (!gateDecision.allowed) {
@@ -32,7 +35,9 @@ class ToolExecutionEngine(private val context: Context) {
                     val appName = args["packageName"]?.jsonPrimitive?.content
                         ?: args["appName"]?.jsonPrimitive?.content
                         ?: return@withContext "Error: Missing app name"
-                    android.util.Log.i("RAFEL_MESSAGE_TRACE", "Stage 3 parsed: appName=$appName")
+                    if (BuildConfig.DEBUG) {
+                        android.util.Log.i("RAFEL_MESSAGE_TRACE", "Stage 3 parsed: appName=$appName")
+                    }
                     appLauncher.launchApp(appName).toAiResponse()
                 }
                 "searchAndCallContact" -> {
@@ -186,7 +191,9 @@ class ToolExecutionEngine(private val context: Context) {
                 }
                 else -> "Error: Tool $name not found."
             }
-            android.util.Log.i("RAFEL_MESSAGE_TRACE", "Stage 8: Tool $name execution result returned to Gemini: $result")
+            if (BuildConfig.DEBUG) {
+                android.util.Log.i("RAFEL_MESSAGE_TRACE", "Stage 8: Tool $name execution result returned to Gemini: $result")
+            }
             result
         } catch (e: Exception) {
             val err = "Error executing $name: ${e.message}"

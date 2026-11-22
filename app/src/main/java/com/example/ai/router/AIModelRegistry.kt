@@ -66,6 +66,8 @@ class AIModelRegistry {
 
         const val GEMINI_WS_ENDPOINT =
             "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+        const val GEMINI_WS_ENDPOINT_V1ALPHA =
+            "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
         const val GEMINI_REST_BASE_URL =
             "https://generativelanguage.googleapis.com/v1beta/models"
 

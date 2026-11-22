@@ -1,7 +1,6 @@
 package com.example.ai.security
 
 import android.content.Context
-import com.example.BuildConfig
 import com.example.ai.router.AIModelManager
 import com.example.voice.RafelLiveDiagnostics
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -159,14 +158,7 @@ object GeminiSecureGateway {
         if (!isUsableApiKey(trimmed)) {
             return false
         }
-        context.getSharedPreferences("RafelPrefs", Context.MODE_PRIVATE)
-            .edit()
-            .putString("api_key", trimmed)
-            .apply()
-        context.getSharedPreferences("rafel_settings", Context.MODE_PRIVATE)
-            .edit()
-            .putString("gemini_api_key", trimmed)
-            .apply()
+        SecureApiKeyStore.saveApiKey(context, trimmed)
 
         RafelLiveDiagnostics.apiKeyConfigured.value = "YES"
         val manager = AIModelManager.getInstance(context)
@@ -179,16 +171,7 @@ object GeminiSecureGateway {
      * Revokes/clears user-configured runtime API keys from device storage.
      */
     fun clearRuntimeApiKey(context: Context) {
-        context.getSharedPreferences("RafelPrefs", Context.MODE_PRIVATE)
-            .edit()
-            .remove("api_key")
-            .remove("gemini_api_key")
-            .apply()
-        context.getSharedPreferences("rafel_settings", Context.MODE_PRIVATE)
-            .edit()
-            .remove("gemini_api_key")
-            .remove("api_key")
-            .apply()
+        SecureApiKeyStore.clearApiKey(context)
         val manager = AIModelManager.getInstance(context)
         val stillHasKey = manager.resolveEffectiveApiKey().isNotBlank()
         RafelLiveDiagnostics.apiKeyConfigured.value = if (stillHasKey) "YES" else "NO"
@@ -200,13 +183,7 @@ object GeminiSecureGateway {
      * production API keys are hardcoded in the APK and reports the exact security status.
      */
     fun auditSecurity(context: Context, effectiveKey: String): ApiKeyAuditReport {
-        val buildConfigKey = try {
-            BuildConfig.GEMINI_API_KEY.trim()
-        } catch (_: Exception) {
-            ""
-        }
-        val buildKeyStatus = validateKeyFormat(buildConfigKey)
-        val apkHasEmbeddedKey = buildKeyStatus == ApiKeyValidationStatus.VALID_GOOGLE_API_KEY
+        val apkHasEmbeddedKey = false
 
         val proxyOperational = isBackendProxyOperational(context)
         val runtimeStatus = if (proxyOperational && effectiveKey.isBlank()) {

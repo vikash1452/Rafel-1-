@@ -63,7 +63,7 @@ class ProactiveConversationManagerTest {
             }
         )
         proactiveManager.isEnabled = true
-        proactiveManager.firstSilenceDelayMs = ProactiveConversationManager.DEFAULT_FIRST_SILENCE_DELAY_MS // 60s
+        proactiveManager.firstSilenceDelayMs = 60_000L
         proactiveManager.frequency = ProactiveFrequency.BALANCED
         proactiveManager.quietHoursEnabled = false
         proactiveManager.onlyInActiveVoiceSession = true
@@ -146,31 +146,36 @@ class ProactiveConversationManagerTest {
      * - Opening lines are varied and never repeat consecutively.
      */
     @Test
-    fun test5_repeatedSilence_enforces3To5MinCooldownAndCapsUnwantedSpeech() = testScope.runTest {
-        proactiveManager.frequency = ProactiveFrequency.BALANCED // 4 min (240s) subsequent cooldown, max 2 turns
+    fun test5_repeatedSilence_enforcesCooldownAndCapsUnwantedSpeech() = testScope.runTest {
+        proactiveManager.frequency = ProactiveFrequency.BALANCED // 10s subsequent cooldown, max 2 turns
+        proactiveManager.firstSilenceDelayMs = ProactiveConversationManager.DEFAULT_FIRST_SILENCE_DELAY_MS // 8s
 
-        // First silence period: 60s
+        // First silence period: 8s
         proactiveManager.onAssistantSpeechFinished(false, true, false)
-        advanceTimeBy(60_500L)
-        simulatedClockMs.addAndGet(60_500L)
-        assertEquals("First proactive message should fire after 60s", 1, triggeredCount.get())
+        advanceTimeBy(4_000L)
+        simulatedClockMs.addAndGet(4_000L)
+        assertNull("Must not speak before 8s delay", triggeredPrompt.get())
+
+        advanceTimeBy(4_500L)
+        simulatedClockMs.addAndGet(4_500L)
+        assertEquals("First proactive message should fire after 8s silence", 1, triggeredCount.get())
         val firstLine = proactiveManager.lastGeneratedOpeningLine
         assertNotNull(firstLine)
 
         // Assistant finishes speaking the first proactive message; user remains silent
         triggeredPrompt.set(null)
         proactiveManager.onAssistantSpeechFinished(false, true, false)
-        assertTrue("Second proactive check should be scheduled with 3-5 min cooldown", proactiveManager.isScheduled())
+        assertTrue("Second proactive check should be scheduled with 10s cooldown", proactiveManager.isScheduled())
 
-        // After another 60s of silence, it must NOT speak again yet (needs 3-5 minutes!)
-        advanceTimeBy(60_000L)
-        simulatedClockMs.addAndGet(60_000L)
-        assertNull("Must NOT trigger a second proactive message after only 60s", triggeredPrompt.get())
+        // After 5s of silence, must not fire yet (needs 10s)
+        advanceTimeBy(5_000L)
+        simulatedClockMs.addAndGet(5_000L)
+        assertNull("Must NOT trigger second proactive message after only 5s", triggeredPrompt.get())
 
-        // Advance the remaining 3+ minutes (total 240.5s since first proactive turn)
-        advanceTimeBy(181_000L)
-        simulatedClockMs.addAndGet(181_000L)
-        assertEquals("Second proactive message may fire after 4 minutes (3-5m window)", 2, triggeredCount.get())
+        // Advance remaining 5.5s (total 10.5s since first proactive turn)
+        advanceTimeBy(5_500L)
+        simulatedClockMs.addAndGet(5_500L)
+        assertEquals("Second proactive message should fire after 10s cooldown", 2, triggeredCount.get())
         val secondLine = proactiveManager.lastGeneratedOpeningLine
         assertNotNull(secondLine)
         assertNotEquals("Proactive opening lines must vary and never repeat", firstLine, secondLine)
@@ -180,10 +185,34 @@ class ProactiveConversationManagerTest {
         proactiveManager.onAssistantSpeechFinished(false, true, false)
         assertFalse("Must NOT schedule any more proactive turns when user remains silent after cap", proactiveManager.isScheduled())
 
-        advanceTimeBy(600_000L)
-        simulatedClockMs.addAndGet(600_000L)
+        advanceTimeBy(60_000L)
+        simulatedClockMs.addAndGet(60_000L)
         assertNull("No further unwanted speech may occur during continuous silence", triggeredPrompt.get())
         assertEquals(2, triggeredCount.get())
+    }
+
+    @Test
+    fun testDefaultAutoSpeaksAutomaticallyAfter5To10SecondsOfSilence() = testScope.runTest {
+        // Verify default values sit right inside the 5-10 second auto-speak window
+        assertTrue(
+            "Initial session delay must be within 5-10s",
+            ProactiveConversationManager.DEFAULT_INITIAL_SESSION_DELAY_MS in 5_000L..10_000L
+        )
+        assertTrue(
+            "Silence delay must be within 5-10s",
+            ProactiveConversationManager.DEFAULT_FIRST_SILENCE_DELAY_MS in 5_000L..10_000L
+        )
+
+        proactiveManager.initialSessionDelayMs = ProactiveConversationManager.DEFAULT_INITIAL_SESSION_DELAY_MS
+        proactiveManager.firstSilenceDelayMs = ProactiveConversationManager.DEFAULT_FIRST_SILENCE_DELAY_MS
+        proactiveManager.onVoiceSessionStarted()
+        proactiveManager.onSessionActivated(isAiSpeaking = false, isSessionConnected = true, isMicMuted = false)
+
+        advanceTimeBy(4_000L)
+        assertEquals("Must wait at least 5s before speaking", 0, triggeredCount.get())
+
+        advanceTimeBy(4_000L) // total 8s >= 7s default initial delay
+        assertEquals("RAFEL must automatically start speaking within 5-10s of silence", 1, triggeredCount.get())
     }
 
     /**

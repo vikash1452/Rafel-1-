@@ -108,7 +108,7 @@ class ScreenCaptureManager private constructor(private val context: Context) {
         }
 
         try {
-            stopProjection() // Ensure clean state before starting
+            stopProjectionInternal(stopForegroundService = false) // Ensure clean state without stopping active projection FGS
 
             val projection = mediaProjectionManager.getMediaProjection(resultCode, data)
             if (projection == null) {
@@ -257,6 +257,10 @@ class ScreenCaptureManager private constructor(private val context: Context) {
      * Cleanly stops screen sharing and releases all media projection and virtual display resources.
      */
     fun stopProjection() {
+        stopProjectionInternal(stopForegroundService = true)
+    }
+
+    private fun stopProjectionInternal(stopForegroundService: Boolean) {
         framePollingJob?.cancel()
         framePollingJob = null
 
@@ -285,6 +289,9 @@ class ScreenCaptureManager private constructor(private val context: Context) {
         _isSharing.value = false
         _latestFrameBase64.value = null
         if (wasSharing) {
+            if (stopForegroundService) {
+                ScreenProjectionForegroundService.stop(context)
+            }
             onSharingStateChanged?.invoke(false)
             RafelLogger.logDiagnostic("Screen capture cleanly stopped and released.")
         }

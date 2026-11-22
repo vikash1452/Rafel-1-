@@ -168,7 +168,7 @@ class ExampleRobolectricTest {
   @Test
   fun `verify Gemini Live voice model and feminine voice identity configuration`() {
     assertEquals("models/gemini-3.8-live", VoiceConfig.GEMINI_LIVE_MODEL)
-    assertEquals("Aoede", VoiceConfig.GEMINI_VOICE_NAME)
+    assertEquals("Sulafat", VoiceConfig.GEMINI_VOICE_NAME)
   }
 
   @Test

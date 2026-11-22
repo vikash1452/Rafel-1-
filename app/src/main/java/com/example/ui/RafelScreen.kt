@@ -163,9 +163,7 @@ fun HomeScreen(
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("RafelPrefs", Context.MODE_PRIVATE) }
     var apiKey by remember {
-        val buildKey = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
-        val saved = if (buildKey.isNotBlank() && buildKey != "MY_GEMINI_API_KEY") buildKey else prefs.getString("api_key", "") ?: ""
-        mutableStateOf(saved)
+        mutableStateOf(com.example.ai.security.SecureApiKeyStore.getApiKey(context))
     }
     var showSettingsDialog by remember { mutableStateOf(false) }
 
@@ -180,11 +178,12 @@ fun HomeScreen(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
-            val started = screenManager.startProjection(result.resultCode, result.data!!)
-            if (started) {
-                RafelForegroundService.activeService?.updateForegroundServiceTypes()
-                android.widget.Toast.makeText(context, "Screen sharing started with Rafel", android.widget.Toast.LENGTH_SHORT).show()
-            }
+            com.example.screen.ScreenProjectionForegroundService.startWithConsent(
+                context = context,
+                resultCode = result.resultCode,
+                consentData = result.data!!
+            )
+            android.widget.Toast.makeText(context, "Screen sharing started with Rafel", android.widget.Toast.LENGTH_SHORT).show()
         } else {
             android.widget.Toast.makeText(context, "Screen share permission was cancelled/denied", android.widget.Toast.LENGTH_SHORT).show()
         }
@@ -194,7 +193,7 @@ fun HomeScreen(
     val voiceStateFromService by RafelForegroundService.currentStateFlow.collectAsState()
     val isMicMuted by RafelForegroundService.isMicMutedFlow.collectAsState()
     val visualizerAmplitude by RafelForegroundService.visualizerAmplitudeFlow.collectAsState()
-    var serviceStarted by remember { mutableStateOf(RafelForegroundService.activeService != null) }
+    val serviceStarted by RafelForegroundService.isServiceRunningFlow.collectAsState()
     var isOverlayGranted by remember { mutableStateOf(com.example.util.PermissionHelper.isOverlayGranted(context)) }
     val pendingAction by PhoneControlManager.pendingActionFlow.collectAsState()
     val coroutineScope = rememberCoroutineScope()
@@ -205,7 +204,6 @@ fun HomeScreen(
         if (permissions[android.Manifest.permission.RECORD_AUDIO] == true) {
             val intent = Intent(context, RafelForegroundService::class.java)
             ContextCompat.startForegroundService(context, intent)
-            serviceStarted = true
         } else {
             android.widget.Toast.makeText(context, "Microphone permission is required!", android.widget.Toast.LENGTH_SHORT).show()
         }
@@ -216,18 +214,12 @@ fun HomeScreen(
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
                 isOverlayGranted = com.example.util.PermissionHelper.isOverlayGranted(context)
-                serviceStarted = RafelForegroundService.activeService != null
+                apiKey = com.example.ai.security.SecureApiKeyStore.getApiKey(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        RafelForegroundService.onStateChange = {
-            serviceStarted = RafelForegroundService.activeService != null
         }
     }
 
@@ -596,7 +588,6 @@ fun HomeScreen(
                         if (hasMic) {
                             val intent = Intent(context, RafelForegroundService::class.java)
                             ContextCompat.startForegroundService(context, intent)
-                            serviceStarted = true
                         } else {
                             val acknowledged = prefs.getBoolean("permission_explanation_acknowledged", false)
                             if (acknowledged) {
@@ -609,7 +600,6 @@ fun HomeScreen(
                     onStopRafel = {
                         val intent = Intent(context, RafelForegroundService::class.java)
                         context.stopService(intent)
-                        serviceStarted = false
                     },
                     onReconnect = {
                         RafelForegroundService.activeService?.reconnectSession()
@@ -761,12 +751,16 @@ fun HomeScreen(
         FuturisticSettingsDialog(
             geminiApiKey = apiKey,
             onSaveSettings = { newGeminiKey ->
-                prefs.edit()
-                    .putString("api_key", newGeminiKey)
-                    .putString("gemini_api_key", newGeminiKey)
-                    .apply()
-                apiKey = newGeminiKey
+                val trimmedKey = newGeminiKey.trim()
+                com.example.ai.security.SecureApiKeyStore.saveApiKey(context, trimmedKey)
+                apiKey = trimmedKey
+                val aiManager = com.example.ai.router.AIModelManager.getInstance(context)
+                aiManager.healthMonitor.clearCooldowns()
+                aiManager.isApiKeyConfigured()
                 RafelForegroundService.activeBackendManager?.updateActiveBackend()
+                if (trimmedKey.isNotBlank()) {
+                    RafelForegroundService.activeService?.reconnectSession()
+                }
                 showSettingsDialog = false
             },
             onDismiss = { showSettingsDialog = false },

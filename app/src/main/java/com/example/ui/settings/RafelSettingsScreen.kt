@@ -1,9 +1,15 @@
 package com.example.ui.settings
 
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -59,6 +65,10 @@ fun RafelSettingsScreen(
 
     var selectedTab by remember { mutableStateOf("all") } // "all", "privacy", "edge_lighting"
 
+    BackHandler(enabled = selectedTab != "all") {
+        selectedTab = "all"
+    }
+
     // If edge lighting settings is selected, show dedicated screen
     if (selectedTab == "edge_lighting") {
         EdgeLightingSettingsScreen(
@@ -68,7 +78,17 @@ fun RafelSettingsScreen(
     }
 
     // Live states
+    val isServiceRunning by RafelForegroundService.isServiceRunningFlow.collectAsState()
     val isMicMuted by RafelForegroundService.isMicMutedFlow.collectAsState()
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            ContextCompat.startForegroundService(context, Intent(context, RafelForegroundService::class.java))
+        } else {
+            Toast.makeText(context, "Microphone permission is required!", Toast.LENGTH_SHORT).show()
+        }
+    }
     val proactivePrefs = remember { context.getSharedPreferences("rafel_proactive_prefs", Context.MODE_PRIVATE) }
     var isProactiveEnabled by remember { mutableStateOf(proactivePrefs.getBoolean("proactive_enabled", true)) }
     var isFloatingActive by remember { mutableStateOf(RafelFloatingService.isRunning(context) && PermissionHelper.isOverlayGranted(context)) }
@@ -147,7 +167,7 @@ fun RafelSettingsScreen(
             } else {
                 MainSettingsList(
                     permissionsList = permissionsList,
-                    isMicMuted = isMicMuted,
+                    isMicMuted = !isServiceRunning || isMicMuted,
                     isFloatingActive = isFloatingActive,
                     isAccessibilityOn = isAccessibilityOn,
                     isNotifAccessOn = isNotifAccessOn,
@@ -166,7 +186,14 @@ fun RafelSettingsScreen(
                         }
                     },
                     onToggleMic = {
-                        RafelForegroundService.toggleMicMute()
+                        val service = RafelForegroundService.activeService
+                        if (service != null) {
+                            service.toggleMicMuted()
+                        } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                            ContextCompat.startForegroundService(context, Intent(context, RafelForegroundService::class.java))
+                        } else {
+                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
                     },
                     onOpenAccessibility = { PermissionHelper.openAccessibilitySettings(context) },
                     onOpenNotifications = { PermissionHelper.openNotificationListenerSettings(context) },
@@ -206,9 +233,7 @@ private fun MainSettingsList(
     val grantedCount = permissionsList.count { it.isGranted }
 
     var geminiKey by remember {
-        val buildKey = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
-        val saved = if (buildKey.isNotBlank() && buildKey != "MY_GEMINI_API_KEY") buildKey else prefs.getString("api_key", "") ?: ""
-        mutableStateOf(saved)
+        mutableStateOf(com.example.ai.security.SecureApiKeyStore.getApiKey(context))
     }
     var showApiKeyDialog by remember { mutableStateOf(false) }
     var showMessagingDialog by remember { mutableStateOf(false) }
@@ -267,12 +292,16 @@ private fun MainSettingsList(
             confirmButton = {
                 Button(
                     onClick = {
-                        prefs.edit()
-                            .putString("api_key", tempGemini)
-                            .putString("gemini_api_key", tempGemini)
-                            .apply()
-                        geminiKey = tempGemini
+                        val trimmedKey = tempGemini.trim()
+                        com.example.ai.security.SecureApiKeyStore.saveApiKey(context, trimmedKey)
+                        geminiKey = trimmedKey
+                        val aiManager = com.example.ai.router.AIModelManager.getInstance(context)
+                        aiManager.healthMonitor.clearCooldowns()
+                        aiManager.isApiKeyConfigured()
                         RafelForegroundService.activeBackendManager?.updateActiveBackend()
+                        if (trimmedKey.isNotBlank()) {
+                            RafelForegroundService.activeService?.reconnectSession()
+                        }
                         showApiKeyDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = SettingsGold)
@@ -485,7 +514,7 @@ private fun MainSettingsList(
                         )
                         Text(
                             text = if (isProactiveEnabled) {
-                                "Speaks after ${silenceDelayMs / 1000L}s silence • ${selectedFrequency.displayName} (3–5m cooldown)"
+                                "Speaks after ${silenceDelayMs / 1000L}s silence • ${selectedFrequency.displayName} (${selectedFrequency.description})"
                             } else {
                                 "Disabled: Responds only when you speak first"
                             },
@@ -549,7 +578,7 @@ private fun MainSettingsList(
                                     )
                                 ) {
                                     Text(
-                                        text = if (sec == 60) "60s (Def)" else "${sec}s",
+                                        text = if (sec == 8) "8s (Def)" else "${sec}s",
                                         color = if (isSelected) SettingsAmber else Color.White.copy(alpha = 0.75f),
                                         fontSize = 11.sp,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
@@ -562,7 +591,7 @@ private fun MainSettingsList(
 
                         // 2. Conversation Frequency Selector
                         Text(
-                            text = "Conversation Frequency (Subsequent 3–5m Cooldown)",
+                            text = "Conversation Frequency (${selectedFrequency.description})",
                             color = SettingsAmber,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold

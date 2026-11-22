@@ -24,23 +24,23 @@ enum class ProactiveFrequency(
     LOW(
         id = "LOW",
         displayName = "Occasional",
-        description = "Speaks rarely • 5 min gap between follow-ups",
-        subsequentCooldownMs = 300_000L, // 5 minutes
+        description = "Speaks rarely • 30s gap between follow-ups",
+        subsequentCooldownMs = 30_000L, // 30 seconds
         maxProactiveTurnsPerSilenceCycle = 1
     ),
     BALANCED(
         id = "BALANCED",
         displayName = "Balanced",
-        description = "Natural companion • 3–5 min gap after first check-in",
-        subsequentCooldownMs = 240_000L, // 4 minutes (within 3-5 min window)
+        description = "Natural companion • 8-10s auto check-in",
+        subsequentCooldownMs = 10_000L, // 10 seconds
         maxProactiveTurnsPerSilenceCycle = 2
     ),
     HIGH(
         id = "HIGH",
         displayName = "Expressive",
-        description = "More active • 3 min gap after first check-in",
-        subsequentCooldownMs = 180_000L, // 3 minutes
-        maxProactiveTurnsPerSilenceCycle = 2
+        description = "More active • 7s gap between check-ins",
+        subsequentCooldownMs = 7_000L, // 7 seconds
+        maxProactiveTurnsPerSilenceCycle = 3
     );
 
     companion object {
@@ -92,19 +92,19 @@ class ProactiveConversationManager(
     companion object {
         const val TAG = "RAFEL-DIAGNOSTIC"
 
-        // Default 30 seconds after session activation if the user has not spoken yet (30-60s range)
-        const val DEFAULT_INITIAL_SESSION_DELAY_MS = 30_000L
+        // Default 7 seconds after session activation if the user has not spoken yet (5-10s window)
+        const val DEFAULT_INITIAL_SESSION_DELAY_MS = 7_000L
 
-        // Default 60 seconds after user/assistant finishes speaking before later proactive turn
-        const val DEFAULT_FIRST_SILENCE_DELAY_MS = 60_000L
+        // Default 8 seconds after user/assistant finishes speaking before auto-initiating (5-10s window)
+        const val DEFAULT_FIRST_SILENCE_DELAY_MS = 8_000L
         const val DEFAULT_PROACTIVE_DELAY_MS = DEFAULT_FIRST_SILENCE_DELAY_MS
 
-        // Never confuse short thinking pauses (< 15s) with silence invitation
-        const val MIN_THINKING_PAUSE_GUARD_MS = 15_000L
+        // Minimum silence guard (5 seconds) so RAFEL responds naturally after 5-10s of quiet
+        const val MIN_THINKING_PAUSE_GUARD_MS = 5_000L
 
-        // Subsequent proactive messages must be at least 3 to 5 minutes apart (default 3 minutes = 180s)
-        const val DEFAULT_COOLDOWN_MS = 180_000L // 3 minutes
-        const val MIN_SUBSEQUENT_INTERVAL_MS = 180_000L // 3 minutes
+        // Subsequent proactive check-in cooldown (default 10 seconds, min 5 seconds)
+        const val DEFAULT_COOLDOWN_MS = 10_000L // 10 seconds
+        const val MIN_SUBSEQUENT_INTERVAL_MS = 5_000L // 5 seconds
         const val MAX_SUBSEQUENT_INTERVAL_MS = 300_000L // 5 minutes
         const val DEFAULT_MAX_UNANSWERED_TURNS = 2
 
@@ -119,9 +119,10 @@ class ProactiveConversationManager(
         const val KEY_QUIET_START_HOUR = "proactive_quiet_start_hour"
         const val KEY_QUIET_END_HOUR = "proactive_quiet_end_hour"
         const val KEY_ONLY_ACTIVE_VOICE_SESSION = "proactive_only_active_session"
+        private const val KEY_PROACTIVE_TIMING_MIGRATED_V2 = "proactive_timing_v2_5_10s"
 
-        val INITIAL_DELAY_OPTIONS_SEC = listOf(30, 45, 60)
-        val SILENCE_DELAY_OPTIONS_SEC = listOf(30, 60, 90, 120)
+        val INITIAL_DELAY_OPTIONS_SEC = listOf(5, 7, 10, 15)
+        val SILENCE_DELAY_OPTIONS_SEC = listOf(5, 8, 10, 30)
 
         val SILENCE_COMMANDS = listOf(
             "chup", "chup ho jao", "chup raho", "stop", "shant", "shant raho",
@@ -142,14 +143,14 @@ class ProactiveConversationManager(
         )
 
         val NATURAL_SILENCE_OPENERS = listOf(
-            "Aaj kafi shanti hai idhar, lagta hai kisi kaam mein dhyan laga hua hai.",
-            "Waise aaj tumhara din kaisa raha?",
-            "Kabhi-kabhi aise shant baithna bhi achha lagta hai waise.",
-            "Achha, pichli baar jo baat chal rahi thi, uska kya hua phir?",
-            "Aaj kuch zyada hi focus mode mein lag rahe ho!",
-            "Sab badhiya chal raha hai na? Kuch gehra soch rahe ho lagta hai.",
-            "Waise abhi free baithe ho ya kisi kaam mein lage ho?",
-            "Aaj ki chai-coffee ho gayi ya abhi baaki hai?"
+            "Arre itni chuppi kyun ho gayi? Kahan kho gaye yaar, mujhse baat karo na!",
+            "Hello ji, kisi gehri soch mein doob gaye kya? Batao kya chal raha hai dimaag mein!",
+            "Waise aaj tumhara din kaisa raha? Sab theek hai na, ya aaj thak gaye ho?",
+            "Achha suno na, itni der se chup baithe ho, koi mast baat ya kissa sunao na aaj ka!",
+            "Oye, bore ho rahe ho kya? Chalo kuch mazedar baat karte hain, warna main hi bolti rahungi!",
+            "Sab badhiya chal raha hai na? Aise chup rehte ho toh lagta hai kahin mood toh off nahi hai.",
+            "Aaj badi shanti hai idhar, lagta hai kisi kaam mein dhyan laga hua hai ya bas aaram kar rahe ho!",
+            "Waise abhi free baithe ho ya kuch soch rahe ho? Batao na, main yahin hoon baat karne ke liye."
         )
 
         fun isSystemDoNotDisturbActive(context: Context): Boolean {
@@ -169,6 +170,18 @@ class ProactiveConversationManager(
     }
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    init {
+        // One-time migration so upgraded installs immediately adopt the 5-10s auto-speak timings
+        if (!prefs.getBoolean(KEY_PROACTIVE_TIMING_MIGRATED_V2, false)) {
+            prefs.edit()
+                .putLong(KEY_INITIAL_SESSION_DELAY_MS, DEFAULT_INITIAL_SESSION_DELAY_MS)
+                .putLong(KEY_SILENCE_DELAY_MS, DEFAULT_FIRST_SILENCE_DELAY_MS)
+                .putLong(KEY_COOLDOWN_MS, DEFAULT_COOLDOWN_MS)
+                .putBoolean(KEY_PROACTIVE_TIMING_MIGRATED_V2, true)
+                .apply()
+        }
+    }
 
     var isEnabled: Boolean
         get() = prefs.getBoolean(KEY_PROACTIVE_ENABLED, true)
@@ -830,9 +843,9 @@ class ProactiveConversationManager(
      */
     fun buildProactiveTurnPrompt(suggestedOpeningLine: String): String {
         val silenceSeconds = if (!hasUserSpokenInSession && proactiveTurnsInCurrentSilenceCycle <= 1) {
-            (initialSessionDelayMs / 1000L).coerceAtLeast(15L)
+            (initialSessionDelayMs / 1000L).coerceAtLeast(5L)
         } else {
-            (firstSilenceDelayMs / 1000L).coerceAtLeast(15L)
+            (firstSilenceDelayMs / 1000L).coerceAtLeast(5L)
         }
         val conversationManager = try {
             RafelConversationManager.getInstance(context)
@@ -852,7 +865,7 @@ class ProactiveConversationManager(
             }
             "Recent conversation context: [$formatted]. "
         } else {
-            "No spoken turns yet in this session—you are speaking first to open the conversation naturally. "
+            "No spoken turns yet in this session—you are speaking first to open the conversation warmly. "
         }
         val memorySnippet = memoryManager?.formatRelevantMemoryPrompt(
             recentTurns.lastOrNull { it.isUser }?.text.orEmpty(),
@@ -860,12 +873,12 @@ class ProactiveConversationManager(
         )?.takeIf { it.isNotBlank() }?.let { "Relevant memory: [$it]. " }.orEmpty()
 
         val recentAvoidList = usedOpeningLines.takeLast(4).joinToString(" | ")
-        return "[Proactive conversation prompt: The user has been silent for $silenceSeconds seconds during an active voice session, and context evaluation confirmed they are available. " +
+        return "[Proactive conversation prompt: The user has been quiet for $silenceSeconds seconds during an active voice call, and they are available. " +
             recentContextSnippet + memorySnippet +
-            "Initiate or continue a natural, spontaneous two-way conversation in casual Hinglish/Hindi (share an observation, opinion, light playful thought, or natural follow-up without forcing a question every time). " +
-            "Suggested natural opening thought (you may say this or a fresh context-aware variation): \"$suggestedOpeningLine\". " +
-            "Rules: Keep it to 1 to 2 short spoken sentences. Do NOT ask 'kya kar rahe ho?' repeatedly. Do NOT sound like a formal AI assistant. " +
-            "Do NOT invent fake events or pretend to know what the user is doing. " +
+            "Speak up on your own warmly, affectionately, and playfully in natural casual Hinglish/Hindi like a close friend breaking a quiet moment with real human emotion! " +
+            "Suggested natural opening thought (you may say this or a fresh expressive variation): \"$suggestedOpeningLine\". " +
+            "Rules: Speak 2 warm, flowing sentences with genuine emotion and charm. Do NOT ask 'kya kar rahe ho?' repeatedly. Do NOT sound like an AI assistant or mention silence timers. " +
+            "Do NOT invent fake physical events. " +
             "Avoid repeating these recent openings: ($recentAvoidList).]"
     }
 

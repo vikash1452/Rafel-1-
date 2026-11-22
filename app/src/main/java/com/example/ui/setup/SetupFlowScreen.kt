@@ -66,6 +66,10 @@ fun SetupFlowScreen(
     val prefs = remember { context.getSharedPreferences("RafelPrefs", Context.MODE_PRIVATE) }
     var currentStep by remember { mutableIntStateOf(1) }
 
+    androidx.activity.compose.BackHandler(enabled = currentStep > 1) {
+        currentStep = (currentStep - 1).coerceAtLeast(1)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -232,17 +236,9 @@ private fun StepDivider(isCompleted: Boolean) {
 private fun Step1ConnectBrain(onNext: () -> Unit) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val prefs = remember { context.getSharedPreferences("RafelPrefs", Context.MODE_PRIVATE) }
+    val savedPrefKey = remember { com.example.ai.security.SecureApiKeyStore.getApiKey(context) }
 
-    val buildKey = remember {
-        try {
-            val k = BuildConfig.GEMINI_API_KEY
-            if (k.isNotBlank() && k != "MY_GEMINI_API_KEY" && k != "YOUR_API_KEY") k else ""
-        } catch (e: Exception) { "" }
-    }
-    val savedPrefKey = remember { prefs.getString("api_key", "") ?: "" }
-
-    var apiKeyInput by remember { mutableStateOf(if (buildKey.isNotBlank()) buildKey else savedPrefKey) }
+    var apiKeyInput by remember { mutableStateOf(savedPrefKey) }
     var isMasked by remember { mutableStateOf(true) }
     var testStatus by remember { mutableStateOf<String?>(null) }
     var isTesting by remember { mutableStateOf(false) }
@@ -320,12 +316,8 @@ private fun Step1ConnectBrain(onNext: () -> Unit) {
                         fontWeight = FontWeight.SemiBold,
                         color = Color.White
                     )
-                    val statusText = when {
-                        buildKey.isNotBlank() -> "Pre-configured"
-                        savedPrefKey.isNotBlank() -> "Connected"
-                        else -> "Setup Required"
-                    }
-                    val statusColor = if (buildKey.isNotBlank() || savedPrefKey.isNotBlank()) SetupGreen else SetupOrange
+                    val statusText = if (savedPrefKey.isNotBlank()) "Connected" else "Setup Required"
+                    val statusColor = if (savedPrefKey.isNotBlank()) SetupGreen else SetupOrange
 
                     Surface(
                         color = statusColor.copy(alpha = 0.18f),
@@ -375,15 +367,6 @@ private fun Step1ConnectBrain(onNext: () -> Unit) {
                     ),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
                 )
-
-                if (buildKey.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "✓ Server environment key detected and verified.",
-                        fontSize = 12.sp,
-                        color = SetupGreen
-                    )
-                }
 
                 if (testStatus != null) {
                     Spacer(modifier = Modifier.height(8.dp))
@@ -445,7 +428,7 @@ private fun Step1ConnectBrain(onNext: () -> Unit) {
         Button(
             onClick = {
                 if (apiKeyInput.isNotBlank()) {
-                    prefs.edit().putString("api_key", apiKeyInput).apply()
+                    com.example.ai.security.SecureApiKeyStore.saveApiKey(context, apiKeyInput)
                 }
                 onNext()
             },
@@ -474,10 +457,12 @@ private suspend fun testGeminiKey(key: String): Boolean = withContext(Dispatcher
             .readTimeout(10, TimeUnit.SECONDS)
             .build()
         val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models?key=$key")
+            .url("https://generativelanguage.googleapis.com/v1beta/models")
+            .header("x-goog-api-key", key.trim())
             .build()
-        val response = client.newCall(request).execute()
-        response.isSuccessful
+        client.newCall(request).execute().use { response ->
+            response.isSuccessful
+        }
     } catch (e: Exception) {
         false
     }

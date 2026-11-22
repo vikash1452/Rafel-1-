@@ -1,7 +1,12 @@
 package com.example.ui.chat
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -73,20 +78,32 @@ fun UnifiedChatScreen(
 
     val voiceStateFromService by RafelForegroundService.currentStateFlow.collectAsState()
     val isMicMuted by RafelForegroundService.isMicMutedFlow.collectAsState()
-    val serviceActive = RafelForegroundService.activeService != null
+    val serviceActive by RafelForegroundService.isServiceRunningFlow.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
-    // Resolve API key
-    val prefs = remember { context.getSharedPreferences("RafelPrefs", Context.MODE_PRIVATE) }
-    val apiKey = remember(prefs) {
-        val buildKey = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
-        if (buildKey.isNotBlank() && buildKey != "MY_GEMINI_API_KEY" && buildKey != "YOUR_API_KEY") {
-            buildKey
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            val intent = Intent(context, RafelForegroundService::class.java)
+            ContextCompat.startForegroundService(context, intent)
         } else {
-            prefs.getString("api_key", "") ?: ""
+            Toast.makeText(context, "Microphone permission is required to talk with Rafel.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun toggleOrStartVoiceService() {
+        val service = RafelForegroundService.activeService
+        if (service != null) {
+            service.toggleMicMuted()
+        } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            val intent = Intent(context, RafelForegroundService::class.java)
+            ContextCompat.startForegroundService(context, intent)
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
@@ -120,9 +137,10 @@ fun UnifiedChatScreen(
         if (trimmed.isNotBlank() && !isThinking) {
             inputText = ""
             focusManager.clearFocus()
+            val freshApiKey = com.example.ai.security.SecureApiKeyStore.getApiKey(context)
             val toolEngine = RafelForegroundService.activeToolEngine
                 ?: com.example.tools.ToolExecutionEngine(context)
-            conversationManager.processUserTextMessage(trimmed, apiKey, toolEngine)
+            conversationManager.processUserTextMessage(trimmed, freshApiKey, toolEngine)
         }
     }
 
@@ -200,15 +218,7 @@ fun UnifiedChatScreen(
                 actions = {
                     // Quick Mic toggle button in header
                     IconButton(
-                        onClick = {
-                            val service = RafelForegroundService.activeService
-                            if (service != null) {
-                                service.toggleMicMuted()
-                            } else {
-                                val intent = Intent(context, RafelForegroundService::class.java)
-                                ContextCompat.startForegroundService(context, intent)
-                            }
-                        },
+                        onClick = { toggleOrStartVoiceService() },
                         modifier = Modifier
                             .testTag("chat_header_mic_button")
                             .size(38.dp)
@@ -298,15 +308,7 @@ fun UnifiedChatScreen(
                 inputText = inputText,
                 onInputTextChanged = { inputText = it },
                 onSendClicked = { sendMessage() },
-                onMicClicked = {
-                    val service = RafelForegroundService.activeService
-                    if (service != null) {
-                        service.toggleMicMuted()
-                    } else {
-                        val intent = Intent(context, RafelForegroundService::class.java)
-                        ContextCompat.startForegroundService(context, intent)
-                    }
-                },
+                onMicClicked = { toggleOrStartVoiceService() },
                 isThinking = isThinking,
                 isMicActive = serviceActive && !isMicMuted
             )

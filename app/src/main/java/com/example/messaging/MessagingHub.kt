@@ -100,7 +100,7 @@ class MessagingHub(private val context: Context) {
             return@withContext "PERMISSION_REQUIRED: Notification access enabled nahi hai. Naye messages sunne ke liye Settings mein jakar Rafel ko Notification access dein."
         }
 
-        if (RafelNotificationListenerService.isReadingPaused) {
+        if (RafelNotificationListenerService.isReadingPaused(context)) {
             return@withContext "PAUSED: Message reading abhi paused hai. Settings se resume kar sakte hain."
         }
 

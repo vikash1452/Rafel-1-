@@ -87,7 +87,8 @@ class RafelConversationManagerTest {
         val prompt = com.example.ai.RafelPersona.SYSTEM_PROMPT
 
         // Verify continuous conversation and anti-Q&A directives
-        assertTrue(prompt.contains("NATURAL CONTINUOUS CONVERSATION (NOT A Q&A MACHINE)"))
+        assertTrue(prompt.contains("NATURAL CONTINUOUS CONVERSATION & DISCOURSE DEPTH"))
+        assertTrue(prompt.contains("robotic Q&A machine"))
         assertTrue(prompt.contains("Aaj college gaya tha"))
         assertTrue(prompt.contains("Mera exam next week hai"))
 

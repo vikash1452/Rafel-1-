@@ -207,6 +207,11 @@ class FloatingOverlayManager(private val context: Context) :
             var downTimestamp = 0L
 
             view.setOnTouchListener { _, event ->
+                // When expanded or showing the quick-action menu, let Compose buttons handle clicks directly
+                if (_currentMode.value != FloatingOverlayMode.COMPACT_CORE) {
+                    return@setOnTouchListener false
+                }
+
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
                         initialX = params.x
@@ -223,8 +228,8 @@ class FloatingOverlayManager(private val context: Context) :
                         if (Math.abs(dx) > dpToPx(6) || Math.abs(dy) > dpToPx(6)) {
                             isMoving = true
                             val screen = getScreenDimensions()
-                            val bubbleWidth = if (_currentMode.value == FloatingOverlayMode.COMPACT_CORE) dpToPx(76) else dpToPx(280)
-                            val bubbleHeight = if (_currentMode.value == FloatingOverlayMode.COMPACT_CORE) dpToPx(76) else dpToPx(240)
+                            val bubbleWidth = dpToPx(76)
+                            val bubbleHeight = dpToPx(76)
 
                             params.x = (initialX + dx).coerceIn(dpToPx(8), screen.x - bubbleWidth - dpToPx(8))
                             params.y = (initialY + dy).coerceIn(dpToPx(36), screen.y - bubbleHeight - dpToPx(48))
@@ -237,23 +242,15 @@ class FloatingOverlayManager(private val context: Context) :
                         }
                         true
                     }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    MotionEvent.ACTION_UP -> {
                         val duration = System.currentTimeMillis() - downTimestamp
                         if (!isMoving) {
                             if (duration > 450) {
-                                // Long Press
-                                _currentMode.value = if (_currentMode.value == FloatingOverlayMode.LONG_PRESS_MENU) {
-                                    FloatingOverlayMode.COMPACT_CORE
-                                } else {
-                                    FloatingOverlayMode.LONG_PRESS_MENU
-                                }
+                                // Long Press on compact core -> Quick Action Menu
+                                _currentMode.value = FloatingOverlayMode.LONG_PRESS_MENU
                             } else {
-                                // Single Tap
-                                _currentMode.value = if (_currentMode.value == FloatingOverlayMode.COMPACT_CORE) {
-                                    FloatingOverlayMode.EXPANDED_VOICE_INTERFACE
-                                } else {
-                                    FloatingOverlayMode.COMPACT_CORE
-                                }
+                                // Single Tap on compact core -> Expanded Voice Interface
+                                _currentMode.value = FloatingOverlayMode.EXPANDED_VOICE_INTERFACE
                             }
                         } else {
                             // Save new position
@@ -262,6 +259,16 @@ class FloatingOverlayManager(private val context: Context) :
                                 .putInt("floating_y", params.y)
                                 .apply()
                         }
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        if (isMoving) {
+                            prefs.edit()
+                                .putInt("floating_x", params.x)
+                                .putInt("floating_y", params.y)
+                                .apply()
+                        }
+                        isMoving = false
                         true
                     }
                     else -> false

@@ -32,7 +32,7 @@ class RafelNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
-        if (sbn == null || isReadingPaused) return
+        if (sbn == null || isReadingPaused(applicationContext)) return
 
         val pkgName = sbn.packageName ?: return
         val platform = AppPlatform.fromPackageName(pkgName)
@@ -98,7 +98,21 @@ class RafelNotificationListenerService : NotificationListenerService() {
         private val _notificationCountFlow = MutableStateFlow(0)
         val notificationCountFlow: StateFlow<Int> = _notificationCountFlow.asStateFlow()
 
+        @Volatile
         var isReadingPaused: Boolean = false
+
+        fun isReadingPaused(context: Context): Boolean {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val paused = prefs.getBoolean(KEY_READING_PAUSED, isReadingPaused)
+            isReadingPaused = paused
+            return paused
+        }
+
+        fun setReadingPaused(context: Context, paused: Boolean) {
+            isReadingPaused = paused
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().putBoolean(KEY_READING_PAUSED, paused).apply()
+        }
 
         fun isNotificationAccessGranted(context: Context): Boolean {
             val enabledPackages = NotificationManagerCompat.getEnabledListenerPackages(context)

@@ -92,6 +92,10 @@ class RafelForegroundService : Service() {
         private val _visualizerAmplitude = MutableStateFlow(0f)
         val visualizerAmplitudeFlow: StateFlow<Float> = _visualizerAmplitude.asStateFlow()
 
+        private val _isServiceRunning = MutableStateFlow(false)
+        val isServiceRunningFlow: StateFlow<Boolean> = _isServiceRunning.asStateFlow()
+
+        @Volatile
         var activeService: RafelForegroundService? = null
         val activeToolEngine: ToolExecutionEngine?
             get() = activeService?.toolEngine
@@ -126,6 +130,7 @@ class RafelForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         activeService = this
+        _isServiceRunning.value = true
         RafelLogger.logVoiceState(RafelVoiceState.IDLE, RafelVoiceState.IDLE)
 
         toolEngine = ToolExecutionEngine(this)
@@ -389,7 +394,9 @@ class RafelForegroundService : Service() {
         }
 
         createNotificationChannel()
-        startForegroundServiceWithNotification()
+        if (!startForegroundServiceWithNotification()) {
+            return
+        }
 
         // Start subsystems
         floatingOverlayManager = FloatingOverlayManager(this)
@@ -473,27 +480,38 @@ class RafelForegroundService : Service() {
         }
     }
 
-    private fun startForegroundServiceWithNotification() {
-        updateForegroundServiceTypes()
+    private fun startForegroundServiceWithNotification(): Boolean {
+        return updateForegroundServiceTypes()
     }
 
-    fun updateForegroundServiceTypes() {
+    fun updateForegroundServiceTypes(): Boolean {
+        val hasRecordAudio = androidx.core.content.ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !hasRecordAudio) {
+            RafelLogger.logError("Cannot start microphone foreground service on API 34+ without RECORD_AUDIO permission.")
+            updateVoiceState(RafelVoiceState.ERROR)
+            stopSelf()
+            return false
+        }
+
         val isScreenSharing = com.example.screen.ScreenCaptureManager.getInstance(this).isSharingFlow.value
         val label = if (isScreenSharing) "Live Screen Sharing & Voice Active" else _currentState.value.displayText
         val notification = createNotification(label)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val types = if (isScreenSharing) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            }
-            try {
-                startForeground(101, notification, types)
-            } catch (e: Exception) {
-                try { startForeground(101, notification) } catch (ignore: Exception) {}
-            }
+        val fgType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         } else {
-            try { startForeground(101, notification) } catch (ignore: Exception) {}
+            0
+        }
+        return try {
+            androidx.core.app.ServiceCompat.startForeground(this, 101, notification, fgType)
+            true
+        } catch (e: Exception) {
+            RafelLogger.logError("Failed to start microphone foreground service", e)
+            updateVoiceState(RafelVoiceState.ERROR)
+            stopSelf()
+            false
         }
     }
 
@@ -602,14 +620,7 @@ class RafelForegroundService : Service() {
     }
 
     fun getGeminiApiKey(): String {
-        val buildKey = try { BuildConfig.GEMINI_API_KEY } catch (e: Exception) { "" }
-        val prefs = getSharedPreferences("RafelPrefs", Context.MODE_PRIVATE)
-        val saved = prefs.getString("api_key", "") ?: prefs.getString("gemini_api_key", "") ?: ""
-        return if (buildKey.isNotBlank() && buildKey != "MY_GEMINI_API_KEY" && buildKey != "YOUR_API_KEY") {
-            buildKey
-        } else {
-            saved
-        }
+        return com.example.ai.security.SecureApiKeyStore.getApiKey(this)
     }
 
     fun setMicMuted(muted: Boolean) {
@@ -690,15 +701,26 @@ class RafelForegroundService : Service() {
             proactiveManager.onVoiceSessionEnded()
         }
         activeService = null
+        _isServiceRunning.value = false
         RafelLogger.logVoiceState(_currentState.value, RafelVoiceState.IDLE)
         _currentState.value = RafelVoiceState.IDLE
         onStateChange?.invoke(RafelVoiceState.IDLE)
 
-        floatingOverlayManager.destroy()
-        micManager.stop()
-        playbackManager.release()
-        liveSessionManager.stopSession()
-        speechTranscriptionManager.destroy()
+        if (::floatingOverlayManager.isInitialized) {
+            floatingOverlayManager.destroy()
+        }
+        if (::micManager.isInitialized) {
+            micManager.stop()
+        }
+        if (::playbackManager.isInitialized) {
+            playbackManager.release()
+        }
+        if (::liveSessionManager.isInitialized) {
+            liveSessionManager.stopSession()
+        }
+        if (::speechTranscriptionManager.isInitialized) {
+            speechTranscriptionManager.destroy()
+        }
         serviceJob.cancel()
     }
 }

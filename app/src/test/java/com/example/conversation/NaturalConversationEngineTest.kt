@@ -426,7 +426,7 @@ class NaturalConversationEngineTest {
                 println("Turn ${idx + 1} | Rafel: $reply")
 
                 val voiceCheck = VoiceBehaviorSettings.inspectVoiceDelivery(reply)
-                assertEquals("Aoede", voiceCheck.voiceIdentity)
+                assertEquals("Sulafat", voiceCheck.voiceIdentity)
                 assertTrue(voiceCheck.sentenceBoundariesPreserved)
                 assertFalse(voiceCheck.hasPauseInducingPunctuation)
                 assertFalse(voiceCheck.hasOverlyFormalVocabulary)
@@ -620,7 +620,7 @@ class NaturalConversationEngineTest {
             rawResponse = overlyLongCasual,
             userPrompt = "Kaisi ho?"
         )
-        assertTrue(PersonaSettings.splitIntoSentences(trimmedCasual).size <= 2)
+        assertTrue(PersonaSettings.splitIntoSentences(trimmedCasual).size <= 4)
 
         val detailedTechnical = "Kotlin coroutines use suspend functions and Continuation-Passing Style (CPS) under the hood. The compiler transforms each suspend point into a state machine label inside a Continuation object. Dispatchers control which thread pool executes the continuation. Structured concurrency ensures child coroutines complete before their parent scope finishes."
         val preservedTech = PersonaSettings.postProcessResponse(
@@ -664,8 +664,8 @@ class NaturalConversationEngineTest {
         assertFalse(naturalSpoken.contains(";"))
         assertFalse(naturalSpoken.contains("..."))
 
-        assertEquals("Aoede", VoiceConfig.GEMINI_VOICE_NAME)
-        assertEquals("Aoede", VoiceBehaviorSettings.voiceName)
+        assertEquals("Sulafat", VoiceConfig.GEMINI_VOICE_NAME)
+        assertEquals("Sulafat", VoiceBehaviorSettings.voiceName)
         assertTrue(VoiceBehaviorSettings.startStreamingOnFirstChunk)
 
         val serverInterruptedCalled = AtomicBoolean(false)
@@ -712,7 +712,7 @@ class NaturalConversationEngineTest {
 
         assertTrue(liveInstruction.contains("Detected User Mood: SAD"))
         assertTrue(restInstruction.contains("Detected User Mood: SAD"))
-        assertTrue(liveInstruction.contains("HUMAN-LIKE VOICE DELIVERY & PROSODY"))
+        assertTrue(liveInstruction.contains("REAL HUMAN EMOTIONAL VOICE STYLE"))
 
         val offlineReply = PersonaSettings.generateContextualReply("Aaj mood kharab hai")
         assertTrue(

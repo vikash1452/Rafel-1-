@@ -50,10 +50,10 @@ object VoiceConfig {
     // from being misinterpreted as user speech while allowing snappy conversational turns
     const val POST_AI_SPEECH_ECHO_GUARD_MS = 220L
 
-    // Ultra-Fast Conversational End-of-Speech silence timeout (320-380ms):
-    // Delivers sub-1-second turnaround while avoiding mid-word clipping
-    const val END_SILENCE_SHORT_UTTERANCE_MS = 380L
-    const val END_SILENCE_NORMAL_MS = 320L
+    // Balanced Natural End-of-Speech silence timeout (460-520ms):
+    // Fast sub-second turnaround while letting the user pause naturally for breath mid-sentence
+    const val END_SILENCE_SHORT_UTTERANCE_MS = 520L
+    const val END_SILENCE_NORMAL_MS = 460L
 
     // Pre-buffer duration to capture starting consonants (~160ms = 4 chunks of 40ms)
     const val PRE_BUFFER_CHUNKS = 4
@@ -66,5 +66,6 @@ object VoiceConfig {
 
     // Gemini Live Model - Native Audio
     const val GEMINI_LIVE_MODEL = "models/gemini-3.8-live"
-    const val GEMINI_VOICE_NAME = "Aoede"
+    // Sulafat: Gemini 2.5 Native Audio's warmest, sweetest, most emotionally expressive HD female voice
+    const val GEMINI_VOICE_NAME = "Sulafat"
 }

@@ -66,6 +66,8 @@ class LiveSessionManager(
 
     @Volatile private var isSetupComplete = false
     @Volatile private var useMinimalSetupFallback = false
+    @Volatile private var useV1BetaFallback = false
+    @Volatile private var activeSessionUsesV1Alpha = false
     val currentGenerationId = AtomicLong(1L)
     val currentSessionId = AtomicLong(100L)
     private var isConnecting = false
@@ -509,36 +511,15 @@ class LiveSessionManager(
     }
 
     /**
-     * Resolves the API key securely.
-     * Prioritizes BuildConfig.GEMINI_API_KEY (injected from AI Studio secrets/.env).
-     * Falls back to SharedPreferences for user-provided settings key.
+     * Resolves the user-configured API key from encrypted storage.
      */
     fun getEffectiveApiKey(): String {
-        val buildKey = try {
-            BuildConfig.GEMINI_API_KEY
-        } catch (e: Exception) {
-            ""
-        }
-        if (buildKey.isNotBlank() && buildKey != "MY_GEMINI_API_KEY" && buildKey != "YOUR_API_KEY") {
-            return buildKey
-        }
-
-        val prefs = context.getSharedPreferences("RafelPrefs", Context.MODE_PRIVATE)
-        val prefKey = prefs.getString("api_key", "") ?: ""
-        if (prefKey.isNotBlank()) return prefKey
-
-        val settingsPrefs = context.getSharedPreferences("rafel_settings", Context.MODE_PRIVATE)
-        val settingsKey = settingsPrefs.getString("gemini_api_key", "") ?: settingsPrefs.getString("api_key", "") ?: ""
-        if (settingsKey.isNotBlank()) return settingsKey
-
-        // Backwards compatibility with previous prefs name
-        val oldPrefs = context.getSharedPreferences("ZoyaPrefs", Context.MODE_PRIVATE)
-        val oldKey = oldPrefs.getString("api_key", "") ?: ""
-        if (oldKey.isNotBlank()) return oldKey
-
+        val storedKey = com.example.ai.security.SecureApiKeyStore.getApiKey(context)
+        if (storedKey.isNotBlank()) return storedKey
         return aiModelManager.resolveEffectiveApiKey()
     }
 
+    @Synchronized
     fun startSession(overrideModel: String? = null) {
         if (webSocket != null) {
             RafelLogger.logDiagnostic("startSession ignored: webSocket already active")
@@ -593,10 +574,16 @@ class LiveSessionManager(
         RafelLiveDiagnostics.setupComplete.value = false
         updateState(RafelVoiceState.WAITING_FOR_AI)
 
-        val baseEndpoint = wsEndpointOverride ?: com.example.ai.router.AIModelRegistry.GEMINI_WS_ENDPOINT
+        val usingAffectiveV1Alpha = wsEndpointOverride == null && !useV1BetaFallback && activeModelInUse.contains("2.5")
+        activeSessionUsesV1Alpha = usingAffectiveV1Alpha
+        val baseEndpoint = wsEndpointOverride ?: if (usingAffectiveV1Alpha) {
+            com.example.ai.router.AIModelRegistry.GEMINI_WS_ENDPOINT_V1ALPHA
+        } else {
+            com.example.ai.router.AIModelRegistry.GEMINI_WS_ENDPOINT
+        }
         val sep = if (baseEndpoint.contains("?")) "&" else "?"
         val sanitizedEndpoint = "${baseEndpoint}${sep}key=[REDACTED]"
-        RafelLogger.logGeminiConnection("Connecting to Gemini Live API WebSocket (sessionId=$sessionId)...")
+        RafelLogger.logGeminiConnection("Connecting to Gemini Live API WebSocket (sessionId=$sessionId, affectiveV1Alpha=$usingAffectiveV1Alpha)...")
         val url = "${baseEndpoint}${sep}key=$apiKey"
         val request = Request.Builder().url(url).build()
 
@@ -659,6 +646,15 @@ class LiveSessionManager(
                 try {
                     webSocket.close(code, reason)
                 } catch (_: Exception) {}
+
+                if (!isSetupComplete && activeSessionUsesV1Alpha && !useV1BetaFallback) {
+                    android.util.Log.w("RAFEL-WS", "v1alpha Affective Dialog closing ($code: $reason). Falling back to v1beta seamlessly...")
+                    useV1BetaFallback = true
+                    this@LiveSessionManager.webSocket = null
+                    isSetupComplete = false
+                    startSession(overrideModel = activeModelInUse)
+                    return
+                }
 
                 if (!isSetupComplete && code == 1007 && !useMinimalSetupFallback) {
                     android.util.Log.w("RAFEL-WS", "Model $activeModelInUse returned 1007 on tuned setup ($reason). Retrying with minimal setup...")
@@ -741,6 +737,14 @@ class LiveSessionManager(
                     model = activeModelInUse,
                     sanitizedEndpoint = sanitizedEndpoint
                 )
+                if (!isSetupComplete && activeSessionUsesV1Alpha && !useV1BetaFallback && responseCode != 401 && responseCode != 403) {
+                    android.util.Log.w("RAFEL-WS", "v1alpha Affective Dialog connection failed (HTTP $responseCode: $excMsg). Falling back to v1beta...")
+                    useV1BetaFallback = true
+                    this@LiveSessionManager.webSocket = null
+                    isSetupComplete = false
+                    startSession(overrideModel = activeModelInUse)
+                    return
+                }
                 val elapsedBeforeFail = (System.currentTimeMillis() - sessionConnectStartTimeMs.get()).coerceAtLeast(1L)
                 val nextFallback = if (!isSetupComplete && responseCode != 401 && responseCode != 403) {
                     aiModelManager.onModelFailureAndSelectFallback(
@@ -778,6 +782,15 @@ class LiveSessionManager(
                 }
                 val recent = recentServerMessages.toList().joinToString(" -> ")
                 android.util.Log.w("RAFEL-WS", "[WS_CLOSED] code=$code reason='$reason' setupComplete=$isSetupComplete lastMsgType=$lastReceivedServerMessageType recentMsgs=[$recent]")
+
+                if (!isSetupComplete && activeSessionUsesV1Alpha && !useV1BetaFallback) {
+                    android.util.Log.w("RAFEL-WS", "v1alpha Affective Dialog closed ($code: $reason). Falling back to v1beta seamlessly...")
+                    useV1BetaFallback = true
+                    this@LiveSessionManager.webSocket = null
+                    isSetupComplete = false
+                    startSession(overrideModel = activeModelInUse)
+                    return
+                }
 
                 if (!isSetupComplete && code == 1007 && !useMinimalSetupFallback) {
                     android.util.Log.w("RAFEL-WS", "Model $activeModelInUse closed with 1007 on tuned setup ($reason). Retrying with minimal setup...")
@@ -852,15 +865,23 @@ PHONE TOOLS (SILENT & NATURAL):
             systemPrompt
         }
 
+        // Sulafat is Gemini 2.5 Native Audio's warmest, sweetest HD female voice;
+        // gracefully fall back to Leda (Youthful) if a legacy Gemini 2.0 model is ever used.
+        val effectiveVoiceName = if (activeModelInUse.contains("2.0")) "Leda" else VoiceConfig.GEMINI_VOICE_NAME
+
         val setupMsg = buildJsonObject {
             putJsonObject("setup") {
                 put("model", activeModelInUse)
                 putJsonObject("generationConfig") {
-                    put("temperature", 0.95)
+                    put("temperature", 1.0)
                     if (!useMinimalSetupFallback) {
                         put("topP", 0.95)
                     }
                     putJsonArray("responseModalities") { add("AUDIO") }
+                    if (activeSessionUsesV1Alpha && !useMinimalSetupFallback && activeModelInUse.contains("2.5")) {
+                        // Unlock Gemini 2.5 Native Audio Affective Dialog for real human emotional voice inflection
+                        put("enableAffectiveDialog", true)
+                    }
                     if (!useMinimalSetupFallback && activeModelInUse.contains("2.5")) {
                         // Disable hidden reasoning latency on Gemini 2.5 Native Audio for instant voice replies
                         putJsonObject("thinkingConfig") {
@@ -870,7 +891,7 @@ PHONE TOOLS (SILENT & NATURAL):
                     putJsonObject("speechConfig") {
                         putJsonObject("voiceConfig") {
                             putJsonObject("prebuiltVoiceConfig") {
-                                put("voiceName", VoiceConfig.GEMINI_VOICE_NAME)
+                                put("voiceName", effectiveVoiceName)
                             }
                         }
                     }
@@ -881,8 +902,8 @@ PHONE TOOLS (SILENT & NATURAL):
                             put("disabled", false)
                             put("startOfSpeechSensitivity", "START_SENSITIVITY_HIGH")
                             put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")
-                            put("prefixPaddingMs", 80)
-                            put("silenceDurationMs", 220)
+                            put("prefixPaddingMs", 120)
+                            put("silenceDurationMs", 420)
                         }
                     }
                     putJsonObject("inputAudioTranscription") {}
@@ -1015,6 +1036,7 @@ PHONE TOOLS (SILENT & NATURAL):
         }
     }
 
+    @Synchronized
     fun reconnectSession(reason: String, overrideModel: String? = null) {
         try {
             webSocket?.close(1000, reason)
@@ -1132,7 +1154,9 @@ PHONE TOOLS (SILENT & NATURAL):
                 }
                 if (!inText.isNullOrBlank()) {
                     liveInputTranscript = inText
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "INPUT_TRANSCRIPT: text=\"$inText\"")
+                    if (BuildConfig.DEBUG) {
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "INPUT_TRANSCRIPT: text=\"$inText\"")
+                    }
                     onUserTranscriptReceived(inText)
                 }
 
@@ -1235,8 +1259,10 @@ PHONE TOOLS (SILENT & NATURAL):
                                     currentTurnAssistantText.append(" ")
                                 }
                                 currentTurnAssistantText.append(cleanPart)
-                                android.util.Log.i("RAFEL-PIPE", "6. MODEL_TEXT_TRANSCRIPT: \"$cleanPart\"")
-                                RafelLogger.logRafelLive("TEXT_RESPONSE_RECEIVED", "text=\"$cleanPart\"")
+                                if (BuildConfig.DEBUG) {
+                                    android.util.Log.i("RAFEL-PIPE", "6. MODEL_TEXT_TRANSCRIPT: \"$cleanPart\"")
+                                    RafelLogger.logRafelLive("TEXT_RESPONSE_RECEIVED", "text=\"$cleanPart\"")
+                                }
                                 appendAssistantText(cleanPart)
                             }
                         }
@@ -1277,57 +1303,59 @@ PHONE TOOLS (SILENT & NATURAL):
                     val sttResult = serverInputTranscript
                     val sttErr = debugSttError ?: "No transcript generated"
 
-                    android.util.Log.i("RAFEL-DEBUG", "=== TURN DIAGNOSTIC LOG ===")
-                    android.util.Log.i("RAFEL-DEBUG", "[REAL_TURN]\ngenerationId=$genId\nturnId=$effectiveTurnId")
-                    android.util.Log.i("RAFEL-DEBUG", "[MIC]\nbytes=$lastTurnPcmBytes\ndurationMs=$lastTurnDurationMs\nsampleRate=16000\nchannels=1")
-                    if (sttResult != null) {
-                        android.util.Log.i("RAFEL-DEBUG", "[DEBUG_STT]\ntranscript=$sttResult")
-                    } else {
-                        android.util.Log.i("RAFEL-DEBUG", "[DEBUG_STT_ERROR]\nerror=$sttErr")
-                    }
-                    android.util.Log.i("RAFEL-DEBUG", "[GEMINI]\nmodel=$activeModelInUse\nresponseText=$respText")
-                    android.util.Log.i("RAFEL-DEBUG", "[AUDIO]\nchunks=$totalChunks\nbytes=$totalBytes\ngenerationId=$genId")
-                    android.util.Log.i("RAFEL-DEBUG", "[TURN]\ncomplete=true\ninterrupted=false")
+                    if (BuildConfig.DEBUG) {
+                        android.util.Log.i("RAFEL-DEBUG", "=== TURN DIAGNOSTIC LOG ===")
+                        android.util.Log.i("RAFEL-DEBUG", "[REAL_TURN]\ngenerationId=$genId\nturnId=$effectiveTurnId")
+                        android.util.Log.i("RAFEL-DEBUG", "[MIC]\nbytes=$lastTurnPcmBytes\ndurationMs=$lastTurnDurationMs\nsampleRate=16000\nchannels=1")
+                        if (sttResult != null) {
+                            android.util.Log.i("RAFEL-DEBUG", "[DEBUG_STT]\ntranscript=$sttResult")
+                        } else {
+                            android.util.Log.i("RAFEL-DEBUG", "[DEBUG_STT_ERROR]\nerror=$sttErr")
+                        }
+                        android.util.Log.i("RAFEL-DEBUG", "[GEMINI]\nmodel=$activeModelInUse\nresponseText=$respText")
+                        android.util.Log.i("RAFEL-DEBUG", "[AUDIO]\nchunks=$totalChunks\nbytes=$totalBytes\ngenerationId=$genId")
+                        android.util.Log.i("RAFEL-DEBUG", "[TURN]\ncomplete=true\ninterrupted=false")
 
-                    android.util.Log.i("RAFEL-EVIDENCE", "=== RAW CONVERSATION TURN EVIDENCE ===")
-                    if (sttResult != null) {
-                        android.util.Log.i("RAFEL-EVIDENCE", "DEBUG STT: $sttResult")
-                    } else {
-                        android.util.Log.i("RAFEL-EVIDENCE", "DEBUG STT ERROR: $sttErr")
-                    }
-                    android.util.Log.i("RAFEL-EVIDENCE", "GEMINI RESPONSE: $respText")
-                    android.util.Log.i("RAFEL-EVIDENCE", "AUDIO CHUNKS: $totalChunks")
-                    android.util.Log.i("RAFEL-EVIDENCE", "TURN ID: $effectiveTurnId")
-                    android.util.Log.i("RAFEL-EVIDENCE", "GENERATION ID: $genId")
-                    android.util.Log.i("RAFEL-EVIDENCE", "TURN COMPLETE: YES")
-                    android.util.Log.i("RAFEL-EVIDENCE", "INTERRUPTED: NO")
-                    android.util.Log.i("RAFEL-EVIDENCE", "ERROR: NONE")
+                        android.util.Log.i("RAFEL-EVIDENCE", "=== RAW CONVERSATION TURN EVIDENCE ===")
+                        if (sttResult != null) {
+                            android.util.Log.i("RAFEL-EVIDENCE", "DEBUG STT: $sttResult")
+                        } else {
+                            android.util.Log.i("RAFEL-EVIDENCE", "DEBUG STT ERROR: $sttErr")
+                        }
+                        android.util.Log.i("RAFEL-EVIDENCE", "GEMINI RESPONSE: $respText")
+                        android.util.Log.i("RAFEL-EVIDENCE", "AUDIO CHUNKS: $totalChunks")
+                        android.util.Log.i("RAFEL-EVIDENCE", "TURN ID: $effectiveTurnId")
+                        android.util.Log.i("RAFEL-EVIDENCE", "GENERATION ID: $genId")
+                        android.util.Log.i("RAFEL-EVIDENCE", "TURN COMPLETE: YES")
+                        android.util.Log.i("RAFEL-EVIDENCE", "INTERRUPTED: NO")
+                        android.util.Log.i("RAFEL-EVIDENCE", "ERROR: NONE")
 
-                    val liveTranscript = liveInputTranscript ?: "TRANSCRIPTION_UNAVAILABLE"
-                    val debugTranscript = sttResult ?: "DEBUG_STT_UNAVAILABLE"
-                    val debugHistory = com.example.conversation.RafelConversationManager.getInstance(context).getDebugHistoryRedacted(limit = 10)
-                    val sysPromptSummary = "Rafel Persona (Young adult Indian female AI companion, natural Hindi/Hinglish, contextual continuity without repetition)"
-                    val routerDec = if (lastToolName != null) "TOOL_EXECUTION ($lastToolName)" else "DIRECT_CONVERSATION"
-                    val finalResp = if (lastToolResult != null) lastToolResult!! else respText
+                        val liveTranscript = liveInputTranscript ?: "TRANSCRIPTION_UNAVAILABLE"
+                        val debugTranscript = sttResult ?: "DEBUG_STT_UNAVAILABLE"
+                        val debugHistory = com.example.conversation.RafelConversationManager.getInstance(context).getDebugHistoryRedacted(limit = 10)
+                        val sysPromptSummary = "Rafel Persona (Young adult Indian female AI companion, natural Hindi/Hinglish, contextual continuity without repetition)"
+                        val routerDec = if (lastToolName != null) "TOOL_EXECUTION ($lastToolName)" else "DIRECT_CONVERSATION"
+                        val finalResp = if (lastToolResult != null) lastToolResult!! else respText
 
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "=== LIVE CONVERSATION DEBUG TRACE ===")
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "TURN_ID: $effectiveTurnId")
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "RAW_AUDIO_METADATA: sampleRate=16000, channels=1, bytes=$lastTurnPcmBytes, durationMs=$lastTurnDurationMs")
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "GEMINI_AUDIO_INPUT: realtimeInput.audio (audio/pcm;rate=16000, chunks=$currentTurnChunkCount)")
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "LIVE_INPUT_TRANSCRIPT: $liveTranscript")
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "DEBUG_STT_TRANSCRIPT: $debugTranscript")
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "ACTIVE_SYSTEM_INSTRUCTION: $sysPromptSummary")
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "CONVERSATION_HISTORY: [${debugHistory.joinToString(" | ")}]")
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "ROUTER_DECISION: $routerDec")
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "MODEL_RESPONSE: $respText")
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "FINAL_SPOKEN_TEXT: $finalResp")
-                    android.util.Log.i("RAFEL-DIAGNOSTIC", "PLAYBACK_GENERATION_ID: $genId")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "=== LIVE CONVERSATION DEBUG TRACE ===")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "TURN_ID: $effectiveTurnId")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "RAW_AUDIO_METADATA: sampleRate=16000, channels=1, bytes=$lastTurnPcmBytes, durationMs=$lastTurnDurationMs")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "GEMINI_AUDIO_INPUT: realtimeInput.audio (audio/pcm;rate=16000, chunks=$currentTurnChunkCount)")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "LIVE_INPUT_TRANSCRIPT: $liveTranscript")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "DEBUG_STT_TRANSCRIPT: $debugTranscript")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "ACTIVE_SYSTEM_INSTRUCTION: $sysPromptSummary")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "CONVERSATION_HISTORY: [${debugHistory.joinToString(" | ")}]")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "ROUTER_DECISION: $routerDec")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "MODEL_RESPONSE: $respText")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "FINAL_SPOKEN_TEXT: $finalResp")
+                        android.util.Log.i("RAFEL-DIAGNOSTIC", "PLAYBACK_GENERATION_ID: $genId")
 
-                    if (lastToolName == null) {
-                        val inputReported = if (liveTranscript != "TRANSCRIPTION_UNAVAILABLE") liveTranscript else debugTranscript
-                        android.util.Log.i("RAFEL-ROUTER", "=== REQUEST ROUTER DIAGNOSTIC ===")
-                        android.util.Log.i("RAFEL-ROUTER", "[REQUEST]\ntranscript=$inputReported\nintent=CONVERSATIONAL_CHAT\nrouterDecision=DIRECT_CONVERSATION\ntoolSelected=NONE\ntoolArguments={}\nconversationContextUsed=true")
-                        android.util.Log.i("RAFEL-ROUTER", "[RESPONSE]\nmodelText=$respText\ntoolResult=NONE\nfinalResponse=$respText")
+                        if (lastToolName == null) {
+                            val inputReported = if (liveTranscript != "TRANSCRIPTION_UNAVAILABLE") liveTranscript else debugTranscript
+                            android.util.Log.i("RAFEL-ROUTER", "=== REQUEST ROUTER DIAGNOSTIC ===")
+                            android.util.Log.i("RAFEL-ROUTER", "[REQUEST]\ntranscript=$inputReported\nintent=CONVERSATIONAL_CHAT\nrouterDecision=DIRECT_CONVERSATION\ntoolSelected=NONE\ntoolArguments={}\nconversationContextUsed=true")
+                            android.util.Log.i("RAFEL-ROUTER", "[RESPONSE]\nmodelText=$respText\ntoolResult=NONE\nfinalResponse=$respText")
+                        }
                     }
 
                     cancelTurnTimeout()
@@ -1519,7 +1547,8 @@ PHONE TOOLS (SILENT & NATURAL):
                 val mediaType = "application/json; charset=utf-8".toMediaType()
                 val requestBody = reqJson.toString().toRequestBody(mediaType)
                 val request = Request.Builder()
-                    .url("https://generativelanguage.googleapis.com/v1beta/models/$sttModelName:generateContent?key=$apiKey")
+                    .url("https://generativelanguage.googleapis.com/v1beta/models/$sttModelName:generateContent")
+                    .header("x-goog-api-key", apiKey)
                     .post(requestBody)
                     .build()
 
@@ -1537,7 +1566,9 @@ PHONE TOOLS (SILENT & NATURAL):
                         if (!transcript.isNullOrBlank()) {
                             serverInputTranscript = transcript
                             debugSttError = null
-                            android.util.Log.i("RAFEL-DEBUG", "[DEBUG_STT]\ntranscript=$transcript")
+                            if (BuildConfig.DEBUG) {
+                                android.util.Log.i("RAFEL-DEBUG", "[DEBUG_STT]\ntranscript=$transcript")
+                            }
                         } else {
                             val candidateError = firstCandidate?.toString() ?: "Empty candidate content"
                             debugSttError = "No text candidate returned: $candidateError"
@@ -1613,7 +1644,9 @@ PHONE TOOLS (SILENT & NATURAL):
         val turn = currentTurn
         if (turn != null) {
             turn.transcript = transcript
-            RafelLogger.logUserTranscript(transcript)
+            if (BuildConfig.DEBUG) {
+                RafelLogger.logUserTranscript(transcript)
+            }
             addMessage("You: $transcript")
             com.example.conversation.RafelConversationManager.getInstance(context).addUserVoiceMessage(transcript)
         }
@@ -1651,18 +1684,24 @@ PHONE TOOLS (SILENT & NATURAL):
         val turnSnapshot = getCurrentTurnSnapshot(toolCallId = id)
         lastToolName = name
         lastToolArgs = args.toString()
-        android.util.Log.i("RAFEL-DIAGNOSTIC", "TOOL_CALL_RECEIVED: id=$id, name=$name, args=$args")
+        if (BuildConfig.DEBUG) {
+            android.util.Log.i("RAFEL-DIAGNOSTIC", "TOOL_CALL_RECEIVED: id=$id, name=$name, args=$args")
+        }
         updateState(RafelVoiceState.WAITING_FOR_AI)
         scope.launch {
-            RafelLogger.logGeminiResponse("Evaluating tool execution request: $name with turn=${turnSnapshot.userTurnId}, transcript: '${turnSnapshot.transcript}'")
+            if (BuildConfig.DEBUG) {
+                RafelLogger.logGeminiResponse("Evaluating tool execution request: $name with turn=${turnSnapshot.userTurnId}, transcript: '${turnSnapshot.transcript}'")
+            }
             val resultStr = toolEngine.execute(name, args, turnSnapshot)
             lastToolResult = resultStr
-            android.util.Log.i("RAFEL-DIAGNOSTIC", "TOOL_RESULT_SENT: id=$id, name=$name, result=$resultStr")
+            if (BuildConfig.DEBUG) {
+                android.util.Log.i("RAFEL-DIAGNOSTIC", "TOOL_RESULT_SENT: id=$id, name=$name, result=$resultStr")
 
-            val effectiveTranscript = turnSnapshot.transcript ?: serverInputTranscript ?: "VOICE_INPUT"
-            android.util.Log.i("RAFEL-ROUTER", "=== REQUEST ROUTER DIAGNOSTIC ===")
-            android.util.Log.i("RAFEL-ROUTER", "[REQUEST]\ntranscript=$effectiveTranscript\nintent=$name\nrouterDecision=TOOL_EXECUTION\ntoolSelected=$name\ntoolArguments=$args\nconversationContextUsed=true")
-            android.util.Log.i("RAFEL-ROUTER", "[RESPONSE]\nmodelText=${currentTurnAssistantText.toString().trim()}\ntoolResult=$resultStr\nfinalResponse=$resultStr")
+                val effectiveTranscript = turnSnapshot.transcript ?: serverInputTranscript ?: "VOICE_INPUT"
+                android.util.Log.i("RAFEL-ROUTER", "=== REQUEST ROUTER DIAGNOSTIC ===")
+                android.util.Log.i("RAFEL-ROUTER", "[REQUEST]\ntranscript=$effectiveTranscript\nintent=$name\nrouterDecision=TOOL_EXECUTION\ntoolSelected=$name\ntoolArguments=$args\nconversationContextUsed=true")
+                android.util.Log.i("RAFEL-ROUTER", "[RESPONSE]\nmodelText=${currentTurnAssistantText.toString().trim()}\ntoolResult=$resultStr\nfinalResponse=$resultStr")
+            }
 
             val responseMsg = buildJsonObject {
                 putJsonObject("toolResponse") {
@@ -1706,6 +1745,9 @@ PHONE TOOLS (SILENT & NATURAL):
         val turnId = "turn_proactive_${System.currentTimeMillis()}"
         startWatchdog(turnId, newGen)
         updateState(RafelVoiceState.WAITING_FOR_AI)
+
+        // Cleanly close any open ambient mic audio stream so Gemini Live immediately responds to proactive clientContent
+        ws.send("{\"realtimeInput\":{\"audioStreamEnd\":true}}")
 
         val msg = buildJsonObject {
             putJsonObject("clientContent") {
@@ -1979,6 +2021,7 @@ PHONE TOOLS (SILENT & NATURAL):
         _messages.value = updated
     }
 
+    @Synchronized
     fun stopSession() {
         currentSessionId.incrementAndGet()
         cancelWatchdog()

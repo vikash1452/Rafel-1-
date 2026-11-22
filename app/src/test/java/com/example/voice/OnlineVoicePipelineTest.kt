@@ -22,7 +22,7 @@ class OnlineVoicePipelineTest {
         assertEquals(16000, VoiceConfig.SAMPLE_RATE_IN)
         assertEquals(24000, VoiceConfig.SAMPLE_RATE_OUT)
         assertEquals("models/gemini-3.8-live", VoiceConfig.GEMINI_LIVE_MODEL)
-        assertEquals("Aoede", VoiceConfig.GEMINI_VOICE_NAME)
+        assertEquals("Sulafat", VoiceConfig.GEMINI_VOICE_NAME)
         assertEquals(640, VoiceConfig.CHUNK_SIZE_SAMPLES)
         assertTrue("Silence normal timeout should be in fast conversational range", VoiceConfig.END_SILENCE_NORMAL_MS in 280L..600L)
     }

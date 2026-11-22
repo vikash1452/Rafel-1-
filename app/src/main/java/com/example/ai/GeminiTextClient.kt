@@ -509,7 +509,7 @@ class GeminiTextClient(
             "${proxyUrl!!.trimEnd('/')}/v1beta/models/$cleanName:streamGenerateContent?alt=sse"
         } else {
             val trimmedBase = (restBaseUrlOverride ?: baseUrl).trimEnd('/')
-            "$trimmedBase/$cleanName:streamGenerateContent?alt=sse&key=$apiKey"
+            "$trimmedBase/$cleanName:streamGenerateContent?alt=sse"
         }
 
         val reqBuilder = Request.Builder()
@@ -697,7 +697,7 @@ class GeminiTextClient(
             "${proxyUrl!!.trimEnd('/')}/v1beta/models/$cleanName:generateContent"
         } else {
             val trimmedBase = (restBaseUrlOverride ?: baseUrl).trimEnd('/')
-            "$trimmedBase/$cleanName:generateContent?key=$apiKey"
+            "$trimmedBase/$cleanName:generateContent"
         }
 
         val reqBuilder = Request.Builder()

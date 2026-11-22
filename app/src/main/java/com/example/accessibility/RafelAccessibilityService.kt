@@ -9,6 +9,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import java.lang.ref.WeakReference
 
 /**
  * Accessibility Service for Rafel Assistant.
@@ -22,7 +23,11 @@ class RafelAccessibilityService : AccessibilityService() {
         // Disabled: No automatic message sending or auto-clicking
         val shouldAutoClick = false
         var targetAppName = "whatsapp"
-        var instance: RafelAccessibilityService? = null
+        @Volatile
+        private var instanceRef: WeakReference<RafelAccessibilityService>? = null
+
+        val instance: RafelAccessibilityService?
+            get() = instanceRef?.get()
 
         fun dispatchGestureClick(x: Float, y: Float): Boolean {
             val inst = instance ?: return false
@@ -60,13 +65,20 @@ class RafelAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        instance = this
+        instanceRef = WeakReference(this)
         Log.d("RafelAccessibility", "Rafel Accessibility Service Connected")
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
-        instance = null
+        instanceRef?.clear()
+        instanceRef = null
         return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        instanceRef?.clear()
+        instanceRef = null
+        super.onDestroy()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {

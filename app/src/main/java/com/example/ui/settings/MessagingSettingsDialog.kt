@@ -35,7 +35,7 @@ fun MessagingSettingsDialog(
         mutableStateOf(RafelNotificationListenerService.isNotificationAccessGranted(context))
     }
     var isPaused by remember {
-        mutableStateOf(RafelNotificationListenerService.isReadingPaused)
+        mutableStateOf(RafelNotificationListenerService.isReadingPaused(context))
     }
     var cacheClearedMessage by remember { mutableStateOf<String?>(null) }
 
@@ -162,7 +162,7 @@ fun MessagingSettingsDialog(
                                 checked = isPaused,
                                 onCheckedChange = { paused ->
                                     isPaused = paused
-                                    RafelNotificationListenerService.isReadingPaused = paused
+                                    RafelNotificationListenerService.setReadingPaused(context, paused)
                                 }
                             )
                         }

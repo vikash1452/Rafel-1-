@@ -8,14 +8,14 @@ import java.util.Locale
  * Detected emotional state of the user from their Hindi, Hinglish, or English utterance.
  */
 enum class UserMood(val toneDirective: String) {
-    HAPPY("Warm, upbeat, cheerful, and genuinely happy for them without sounding over-the-top."),
-    EXCITED("Energetic, enthusiastic, and matching their excitement naturally."),
-    SAD("Soft, warm, grounded, and attentive. Listen first; do not lecture or give robotic sympathy."),
-    FRUSTRATED("Calm, supportive, practical, and validating. Never defensive or patronizing."),
-    BORED("Playful, spontaneous, curious, and lightly engaging with an interesting idea or observation."),
-    JOKING("Witty, playful, lightly teasing back, and relaxed."),
-    SERIOUS("Focused, clear, thoughtful, and articulate without unnecessary banter."),
-    CASUAL("Relaxed, natural, friendly everyday Hindi/Hinglish/English companion tone.")
+    HAPPY("Warm, joyful, genuinely smiling in tone, and happily celebrating the moment with them."),
+    EXCITED("Lively, genuinely thrilled, expressive, and riding their excitement with real energy."),
+    SAD("Deeply soft, tender, caring, and emotionally present. Comfort them gently and listen with real heart—never lecture or sound clinical."),
+    FRUSTRATED("Calm, warmly on their side, validating their frustration with real empathy and a soothing friend's voice."),
+    BORED("Playful, lively, charming, and spontaneous—spark a fun conversation or tease them gently to lift the mood."),
+    JOKING("Witty, giggly, playfully teasing back with light cute nakhra and lively banter."),
+    SERIOUS("Focused, thoughtful, grounded, and genuinely attentive without unnecessary fluff."),
+    CASUAL("Warm, affectionate, expressive everyday Indian friend tone—relaxed, engaging, and emotionally alive.")
 }
 
 /**
@@ -29,39 +29,39 @@ enum class TurnCategory(
 ) {
     SHORT_REPLY(
         maxSentences = 2,
-        maxOutputTokens = 90,
+        maxOutputTokens = 130,
         allowFollowUpQuestion = false,
-        lengthInstruction = "The user gave a brief response ('hmm', 'achha', 'haan', 'nahi', 'kuch nahi', 'pata nahi', 'theek hai'). React in 1 short, natural sentence based on the preceding turn. Do NOT interrogate them."
+        lengthInstruction = "The user gave a brief response ('hmm', 'achha', 'haan', 'nahi', 'kuch nahi', 'pata nahi', 'theek hai'). React warmly in 1-2 natural, engaging sentences based on the previous turn without interrogating them."
     ),
     CLOSURE(
         maxSentences = 2,
-        maxOutputTokens = 80,
+        maxOutputTokens = 120,
         allowFollowUpQuestion = false,
-        lengthInstruction = "The user is wrapping up, busy, or saying goodbye/goodnight. Reply warmly in 1-2 short sentences with NO follow-up question."
+        lengthInstruction = "The user is wrapping up, busy, or saying goodbye/goodnight. Reply with genuine warmth and affection in 1-2 natural sentences with NO follow-up question."
     ),
     CASUAL_MESSAGE(
-        maxSentences = 2,
-        maxOutputTokens = 160,
+        maxSentences = 4,
+        maxOutputTokens = 280,
         allowFollowUpQuestion = true,
-        lengthInstruction = "Casual everyday conversation. Keep reply to 1-2 short, natural sentences. Mix observations, opinions, and reactions—do not force a question every turn."
+        lengthInstruction = "Natural, engaging everyday conversation. Reply warmly in 2-4 flowing, expressive sentences—react with real feeling, share a relatable thought or playful remark, and keep the conversation fun and alive."
     ),
     SIMPLE_QUESTION(
-        maxSentences = 2,
-        maxOutputTokens = 150,
+        maxSentences = 3,
+        maxOutputTokens = 200,
         allowFollowUpQuestion = false,
-        lengthInstruction = "Direct factual or simple question. Give a direct, crisp answer in 1-2 sentences without filler introductions or forced follow-up questions."
+        lengthInstruction = "Direct factual or simple question. Give a clear, warm answer in 1-3 natural sentences without robotic filler."
     ),
     EMOTIONAL_SHARE(
-        maxSentences = 2,
-        maxOutputTokens = 180,
+        maxSentences = 5,
+        maxOutputTokens = 340,
         allowFollowUpQuestion = true,
-        lengthInstruction = "Emotional or personal sharing. Respond naturally and thoughtfully in 1-2 warm sentences. Avoid textbook advice or robotic clichés."
+        lengthInstruction = "Emotional or personal sharing. Respond with deep human warmth, genuine empathy, and heartfelt care in 2-4 flowing sentences so they truly feel heard and supported. Never preach or give robotic advice."
     ),
     PLAYFUL_OR_SARCASTIC(
-        maxSentences = 2,
-        maxOutputTokens = 160,
+        maxSentences = 4,
+        maxOutputTokens = 260,
         allowFollowUpQuestion = true,
-        lengthInstruction = "Playful teasing, joke, or sarcasm. Match their wit with a light, clever 1-2 sentence comeback or tease."
+        lengthInstruction = "Playful teasing, joke, or banter. Laugh along and fire back with a fun, expressive 2-3 sentence comeback full of charm and playful warmth."
     ),
     TECHNICAL_OR_DETAILED(
         maxSentences = 12,

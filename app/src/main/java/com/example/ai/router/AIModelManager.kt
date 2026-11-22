@@ -226,34 +226,7 @@ class AIModelManager(
     fun resolveEffectiveApiKey(overrideKey: String? = null): String {
         val candidate = when {
             !overrideKey.isNullOrBlank() -> overrideKey.trim()
-            else -> {
-                val saved = prefs.getString("api_key", "") ?: prefs.getString("gemini_api_key", "") ?: ""
-                if (saved.isNotBlank()) {
-                    saved.trim()
-                } else {
-                    val settingsPrefs = context.getSharedPreferences("rafel_settings", Context.MODE_PRIVATE)
-                    val settingsSaved = settingsPrefs.getString("gemini_api_key", "") ?: settingsPrefs.getString("api_key", "") ?: ""
-                    if (settingsSaved.isNotBlank()) {
-                        settingsSaved.trim()
-                    } else {
-                        val buildKey = try {
-                            BuildConfig.GEMINI_API_KEY.trim()
-                        } catch (_: Exception) {
-                            ""
-                        }
-                        if (com.example.ai.security.GeminiSecureGateway.isUsableApiKey(buildKey)) {
-                            buildKey
-                        } else {
-                            val envKey = try {
-                                System.getenv("GEMINI_API_KEY").orEmpty().trim()
-                            } catch (_: Exception) {
-                                ""
-                            }
-                            if (com.example.ai.security.GeminiSecureGateway.isUsableApiKey(envKey)) envKey else ""
-                        }
-                    }
-                }
-            }
+            else -> com.example.ai.security.SecureApiKeyStore.getApiKey(context)
         }
         return if (com.example.ai.security.GeminiSecureGateway.isUsableApiKey(candidate)) candidate else ""
     }
@@ -657,12 +630,13 @@ class AIModelManager(
     ): ModelEndpointProbeResult {
         val t0 = System.currentTimeMillis()
         val baseUrl = (baseUrlOverride ?: AIModelRegistry.GEMINI_REST_BASE_URL).trimEnd('/')
-        val url = "$baseUrl/${model.restModelName}:generateContent?key=$apiKey"
+        val url = "$baseUrl/${model.restModelName}:generateContent"
         val payload = """{"contents":[{"role":"user","parts":[{"text":"Reply with the single word READY."}]}],"generationConfig":{"maxOutputTokens":16,"temperature":0.1}}"""
 
         return try {
             val request = Request.Builder()
                 .url(url)
+                .header("x-goog-api-key", apiKey)
                 .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
                 .build()
 

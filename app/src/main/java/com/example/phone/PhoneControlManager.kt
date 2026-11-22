@@ -161,7 +161,9 @@ class PhoneControlManager(private val context: Context) {
     ): String {
         val cleanNumber = phoneNumber.replace(Regex("[^0-9+*#]"), "")
         val maskedNumber = if (cleanNumber.length > 4) "***${cleanNumber.takeLast(4)}" else "***"
-        android.util.Log.i("RAFEL_CALL_TRACE", "Stage 3 resolved: Contact '$displayName', number masked=$maskedNumber")
+        if (com.example.BuildConfig.DEBUG) {
+            android.util.Log.i("RAFEL_CALL_TRACE", "Stage 3 resolved: Contact '$displayName', number masked=$maskedNumber")
+        }
 
         val hasCallPermission = ContextCompat.checkSelfPermission(
             context,
@@ -343,6 +345,16 @@ class PhoneControlManager(private val context: Context) {
         val isRawNumber = contactName.replace(Regex("[^0-9+]"), "").length >= 3 &&
                 contactName.matches(Regex("^[0-9+\\-*#\\s()]+$"))
 
+        if (!isRawNumber) {
+            val hasContactsPermission = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_CONTACTS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!hasContactsPermission) {
+                return@withContext "PERMISSION_DENIED: READ_CONTACTS permission is required to find '$contactName'. Please grant Contacts permission in Settings."
+            }
+        }
+
         val matches = if (isRawNumber) {
             listOf(Pair(contactName.trim(), contactName.replace(Regex("[^0-9+]"), "")))
         } else {
@@ -507,10 +519,8 @@ class PhoneControlManager(private val context: Context) {
         return emptyList()
     }
 
-    fun openApp(appName: String): String {
-        return kotlinx.coroutines.runBlocking {
-            com.example.tools.AppLauncherTool(context).launchApp(appName).toAiResponse()
-        }
+    suspend fun openApp(appName: String): String {
+        return com.example.tools.AppLauncherTool(context).launchApp(appName).toAiResponse()
     }
 
     fun searchYouTube(query: String): String {

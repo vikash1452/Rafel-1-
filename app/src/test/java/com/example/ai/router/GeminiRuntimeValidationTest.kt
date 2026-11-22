@@ -195,9 +195,9 @@ class GeminiRuntimeValidationTest {
 
     @Test
     fun test3_liveAudioAoedeVoiceStreamingContinuousPlaybackInterruptionAndNoDuplication() {
-        // Verify Aoede voice configuration constants
-        assertEquals("Aoede", VoiceConfig.GEMINI_VOICE_NAME)
-        assertEquals("Aoede", VoiceBehaviorSettings.voiceName)
+        // Verify Sulafat voice configuration constants
+        assertEquals("Sulafat", VoiceConfig.GEMINI_VOICE_NAME)
+        assertEquals("Sulafat", VoiceBehaviorSettings.voiceName)
         assertTrue("First audio chunk must start streaming immediately (0 startup buffer)", VoiceBehaviorSettings.startStreamingOnFirstChunk)
         assertTrue(VoiceBehaviorSettings.stopImmediatelyOnInterruption)
 
@@ -241,14 +241,17 @@ class GeminiRuntimeValidationTest {
             liveProvider.connectSession()
 
             assertTrue("Expected GeminiLiveProvider WebSocket setupComplete", setupLatch.await(6, TimeUnit.SECONDS))
-            assertTrue(liveProvider.isSessionReady())
+            assertTrue(
+                "Expected liveProvider.isSessionReady() == true; states=$observedStates, wsState=${RafelLiveDiagnostics.webSocketState.value}, setupComplete=${RafelLiveDiagnostics.setupComplete.value}, model=${liveSessionManager.getActiveModel()}, err=${RafelLiveDiagnostics.lastWebSocketError.value}",
+                liveProvider.isSessionReady()
+            )
             assertEquals("CONNECTED", RafelLiveDiagnostics.webSocketState.value)
             assertEquals("GEMINI_LIVE_WS", RafelLiveDiagnostics.activeProvider.value)
             assertEquals("YES", RafelLiveDiagnostics.apiKeyConfigured.value)
 
-            // Verify Aoede voice was sent in WebSocket setup payload
+            // Verify Sulafat voice was sent in WebSocket setup payload
             val acceptedSetup = server.receivedWsSetupFrames.last()
-            assertTrue("Setup frame must configure Aoede voice", acceptedSetup.contains("\"voiceName\":\"Aoede\""))
+            assertTrue("Setup frame must configure Sulafat voice", acceptedSetup.contains("\"voiceName\":\"Sulafat\""))
 
             // Send a live conversational prompt via GeminiLiveProvider
             val sendRes = runBlocking {
