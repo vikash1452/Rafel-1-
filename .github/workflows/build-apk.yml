@@ -15,6 +15,8 @@ jobs:
   build-debug-apk:
     name: Build Debug APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -71,12 +73,27 @@ jobs:
 
       - name: Verify APK output
         run: |
-          ls -lh app/build/outputs/apk/debug/app-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/RAFEL-debug.apk
+          ls -lh app/build/outputs/apk/debug/RAFEL-debug.apk
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: RAFEL-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/RAFEL-debug.apk
           retention-days: 30
           if-no-files-found: error
+
+      - name: Publish direct APK to GitHub Release
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view latest-debug >/dev/null 2>&1; then
+            gh release upload latest-debug app/build/outputs/apk/debug/RAFEL-debug.apk --clobber
+          else
+            gh release create latest-debug app/build/outputs/apk/debug/RAFEL-debug.apk \
+              --title "RAFEL Latest Debug APK" \
+              --notes "Latest automated debug APK build from GitHub Actions."
+          fi
