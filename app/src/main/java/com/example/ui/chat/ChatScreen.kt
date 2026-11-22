@@ -48,6 +48,7 @@ import com.example.conversation.RafelConversationManager
 import com.example.conversation.UnifiedMessage
 import com.example.conversation.UnifiedMessageType
 import com.example.voice.RafelVoiceState
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -79,6 +80,8 @@ fun UnifiedChatScreen(
     val voiceStateFromService by RafelForegroundService.currentStateFlow.collectAsState()
     val isMicMuted by RafelForegroundService.isMicMutedFlow.collectAsState()
     val serviceActive by RafelForegroundService.isServiceRunningFlow.collectAsState()
+    val pendingAction by com.example.phone.PhoneControlManager.pendingActionFlow.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
 
     var inputText by remember { mutableStateOf("") }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
@@ -298,6 +301,65 @@ fun UnifiedChatScreen(
                     if (isThinking) {
                         item(key = "thinking_indicator") {
                             ThinkingIndicatorItem()
+                        }
+                    }
+                }
+            }
+
+            // Pending Action Confirmation Banner (Direct Call / SMS confirmation)
+            AnimatedVisibility(
+                visible = pendingAction != null,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                pendingAction?.let { action ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1528)),
+                        border = BorderStroke(1.2.dp, ColorNeonOrange)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = action.title,
+                                color = ColorNeonGold,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.5.sp
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = action.description,
+                                color = Color.White.copy(alpha = 0.8f),
+                                fontSize = 12.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = { com.example.phone.PhoneControlManager.clearPendingAction() },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White.copy(alpha = 0.8f))
+                                ) {
+                                    Text("Cancel", fontSize = 12.sp)
+                                }
+                                Button(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            com.example.phone.PhoneControlManager.confirmPendingAction()
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = ColorNeonOrange, contentColor = Color.White)
+                                ) {
+                                    Text("Confirm", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
                     }
                 }

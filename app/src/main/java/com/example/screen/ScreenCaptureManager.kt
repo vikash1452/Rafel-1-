@@ -292,6 +292,7 @@ class ScreenCaptureManager private constructor(private val context: Context) {
             if (stopForegroundService) {
                 ScreenProjectionForegroundService.stop(context)
             }
+            com.example.RafelForegroundService.activeService?.updateForegroundServiceTypes()
             onSharingStateChanged?.invoke(false)
             RafelLogger.logDiagnostic("Screen capture cleanly stopped and released.")
         }

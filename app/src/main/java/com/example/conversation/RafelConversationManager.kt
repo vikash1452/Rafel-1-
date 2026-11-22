@@ -667,8 +667,16 @@ class RafelConversationManager private constructor(private val appContext: Conte
                 when (intentResult.target) {
                     "torch_on" -> Pair("toggleTorch", buildJsonObject { put("state", "on") })
                     "torch_off" -> Pair("toggleTorch", buildJsonObject { put("state", "off") })
-                    "volume" -> Pair("adjustVolume", buildJsonObject { put("direction", "up") })
+                    "volume" -> Pair("adjustVolume", buildJsonObject { put("direction", intentResult.secondaryData ?: "up") })
                     "location" -> Pair("getCurrentLocation", buildJsonObject {})
+                    "notifications" -> Pair("openNotificationPanel", buildJsonObject {})
+                    "quick_settings" -> Pair("openQuickSettings", buildJsonObject {})
+                    "click" -> {
+                        val clickText = intentResult.secondaryData
+                        if (clickText.isNullOrBlank()) null
+                        else Pair("clickTextOnScreen", buildJsonObject { put("text", clickText) })
+                    }
+                    "accessibility_nav" -> Pair("performAccessibilityAction", buildJsonObject { put("actionType", intentResult.secondaryData ?: "back") })
                     else -> null
                 }
             }

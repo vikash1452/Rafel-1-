@@ -428,7 +428,11 @@ private fun Step1ConnectBrain(onNext: () -> Unit) {
         Button(
             onClick = {
                 if (apiKeyInput.isNotBlank()) {
-                    com.example.ai.security.SecureApiKeyStore.saveApiKey(context, apiKeyInput)
+                    val saved = com.example.ai.security.SecureApiKeyStore.saveApiKey(context, apiKeyInput)
+                    if (!saved) {
+                        testStatus = "⚠️ Key secure storage mein save nahi hui — kripya key dobara daalo."
+                        return@Button
+                    }
                 }
                 onNext()
             },

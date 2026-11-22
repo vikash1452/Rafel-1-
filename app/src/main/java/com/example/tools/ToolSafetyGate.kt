@@ -89,7 +89,10 @@ object ToolSafetyGate {
                 "openApp", "openSettings", "searchYouTube", "openCamera", "openGallery", "showPhotos",
                 "getCurrentLocation", "whereAmI", "adjustVolume", "setVolumePercent", "getSimCardInfo",
                 "setBrightness", "openMaps", "navigate", "addCalendarEvent", "playMedia",
-                "readRecentMessages", "explainMessage", "clearMessageCache", "describeScreen", "stopScreenShare"
+                "readRecentMessages", "explainMessage", "clearMessageCache",
+                "describeScreen", "analyzeScreenContent", "stopScreenShare",
+                "toggleTorch", "performAccessibilityAction", "clickTextOnScreen",
+                "openNotificationPanel", "openQuickSettings", "confirmPendingAction", "cancelPendingAction"
             )
             val callingTools = listOf("searchAndCallContact", "sendSms", "sendWhatsAppMessage", "composeMessage", "sendGmail")
             if (isDirectOrLiveAudioTurn && (toolName in nonDestructiveTools || toolName in callingTools)) {

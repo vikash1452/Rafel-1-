@@ -293,16 +293,24 @@ private fun MainSettingsList(
                 Button(
                     onClick = {
                         val trimmedKey = tempGemini.trim()
-                        com.example.ai.security.SecureApiKeyStore.saveApiKey(context, trimmedKey)
-                        geminiKey = trimmedKey
-                        val aiManager = com.example.ai.router.AIModelManager.getInstance(context)
-                        aiManager.healthMonitor.clearCooldowns()
-                        aiManager.isApiKeyConfigured()
-                        RafelForegroundService.activeBackendManager?.updateActiveBackend()
-                        if (trimmedKey.isNotBlank()) {
-                            RafelForegroundService.activeService?.reconnectSession()
+                        val saved = com.example.ai.security.SecureApiKeyStore.saveApiKey(context, trimmedKey)
+                        if (!saved && trimmedKey.isNotBlank()) {
+                            Toast.makeText(
+                                context,
+                                "Secure storage error: kripya Gemini API key dobara daalo.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        } else {
+                            geminiKey = trimmedKey
+                            val aiManager = com.example.ai.router.AIModelManager.getInstance(context)
+                            aiManager.healthMonitor.clearCooldowns()
+                            aiManager.isApiKeyConfigured()
+                            RafelForegroundService.activeBackendManager?.updateActiveBackend()
+                            if (trimmedKey.isNotBlank()) {
+                                RafelForegroundService.activeService?.reconnectSession()
+                            }
+                            showApiKeyDialog = false
                         }
-                        showApiKeyDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = SettingsGold)
                 ) {
@@ -1058,10 +1066,34 @@ private fun UniversalAiRouterSettingsCard(
     val modelManager = remember { com.example.ai.router.AIModelManager.getInstance(context) }
     val snapshot by modelManager.telemetrySnapshot.collectAsState()
     val isAutoMode by modelManager.isAutoModeEnabled.collectAsState()
+    val requiresKeyReentry by com.example.ai.security.SecureApiKeyStore.requiresKeyReentry.collectAsState()
+    val reentryMessage by com.example.ai.security.SecureApiKeyStore.reentryMessage.collectAsState()
     var isProbing by remember { mutableStateOf(false) }
     var probeResults by remember { mutableStateOf<List<com.example.ai.router.ModelEndpointProbeResult>>(emptyList()) }
 
     SettingsCard {
+        if (requiresKeyReentry) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF3E1518))
+                    .border(1.dp, Color(0xFFFF5252).copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                    .clickable { onOpenApiKeyDialog() }
+                    .padding(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFF8A80), modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = reentryMessage ?: "Secure storage reset ho gaya — kripya Gemini API key dobara daalo.",
+                    color = Color.White,
+                    fontSize = 11.5.sp,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
         // 1. Active Model & Connection Status Header
         SettingsRowWithIcon(
             icon = Icons.Default.Psychology,

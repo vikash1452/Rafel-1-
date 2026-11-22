@@ -799,10 +799,43 @@ object AssistantIntentRouter {
             return SemanticIntentResult(AssistantIntent.DEVICE_CONTROL, true, "torch_off", null, 0.98f, "Torch OFF command")
         }
         if (clean.contains("volume") || clean.contains("awaz")) {
-            return SemanticIntentResult(AssistantIntent.DEVICE_CONTROL, true, "volume", null, 0.95f, "Volume adjustment command")
+            val dir = when {
+                clean.contains("mute") && !clean.contains("unmute") -> "mute"
+                clean.contains("unmute") -> "unmute"
+                clean.contains("max") || clean.contains("full") -> "max"
+                clean.contains("down") || clean.contains("kam") || clean.contains("slow") || clean.contains("low") || clean.contains("decrease") || clean.contains("ghata") -> "down"
+                else -> "up"
+            }
+            return SemanticIntentResult(AssistantIntent.DEVICE_CONTROL, true, "volume", dir, 0.95f, "Volume adjustment command ($dir)")
         }
         if (clean.contains("where am i") || clean.contains("meri location") || clean.contains("location kya hai") || clean.contains("kahan hoon")) {
             return SemanticIntentResult(AssistantIntent.DEVICE_CONTROL, true, "location", null, 0.95f, "Location inquiry command")
+        }
+        if (clean.contains("notification panel") || clean.contains("notifications kholo") || clean.contains("notification drawer")) {
+            return SemanticIntentResult(AssistantIntent.DEVICE_CONTROL, true, "notifications", null, 0.95f, "Notification panel command")
+        }
+        if (clean.contains("quick settings")) {
+            return SemanticIntentResult(AssistantIntent.DEVICE_CONTROL, true, "quick_settings", null, 0.95f, "Quick settings command")
+        }
+        if (clean.startsWith("click ") || clean.startsWith("tap ") || clean.contains(" par click karo") || clean.contains(" par tap karo")) {
+            val clickTarget = when {
+                clean.startsWith("click ") -> clean.removePrefix("click ").trim()
+                clean.startsWith("tap ") -> clean.removePrefix("tap ").trim()
+                clean.contains(" par click karo") -> clean.substringBefore(" par click karo").trim()
+                clean.contains(" par tap karo") -> clean.substringBefore(" par tap karo").trim()
+                else -> ""
+            }
+            if (clickTarget.isNotBlank()) {
+                return SemanticIntentResult(AssistantIntent.DEVICE_CONTROL, true, "click", clickTarget, 0.92f, "Accessibility click command")
+            }
+        }
+        if (clean in listOf("go back", "piche jao", "peeche jao", "back jao", "go home", "home screen", "recent apps", "recents kholo")) {
+            val navAction = when {
+                clean.contains("home") -> "home"
+                clean.contains("recent") -> "recents"
+                else -> "back"
+            }
+            return SemanticIntentResult(AssistantIntent.DEVICE_CONTROL, true, "accessibility_nav", navAction, 0.92f, "Accessibility navigation command ($navAction)")
         }
         return null
     }

@@ -170,6 +170,8 @@ fun HomeScreen(
     // Screen Sharing State & Official MediaProjection Consent Launcher
     val screenManager = remember { com.example.screen.ScreenCaptureManager.getInstance(context) }
     val isScreenSharing by screenManager.isSharingFlow.collectAsState()
+    val requiresKeyReentry by com.example.ai.security.SecureApiKeyStore.requiresKeyReentry.collectAsState()
+    val reentryMessage by com.example.ai.security.SecureApiKeyStore.reentryMessage.collectAsState()
     var showScreenPrivacyDialog by remember { mutableStateOf(false) }
     var showMessagingDialog by remember { mutableStateOf(false) }
     var showPermissionExplanationDialog by remember { mutableStateOf(false) }
@@ -309,6 +311,38 @@ fun HomeScreen(
                     containerColor = ColorCanvasDark
                 ),
                 actions = {
+                    // Screen Share toggle button
+                    IconButton(
+                        onClick = {
+                            if (isScreenSharing) {
+                                screenManager.stopProjection()
+                                android.widget.Toast.makeText(context, "Screen sharing stopped", android.widget.Toast.LENGTH_SHORT).show()
+                            } else {
+                                showScreenPrivacyDialog = true
+                            }
+                        },
+                        modifier = Modifier
+                            .testTag("screen_share_button")
+                            .padding(end = 4.dp)
+                            .size(40.dp)
+                            .background(
+                                if (isScreenSharing) ColorNeonCyan.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.06f),
+                                CircleShape
+                            )
+                            .border(
+                                1.dp,
+                                if (isScreenSharing) ColorNeonCyan else ColorSubtleBorder,
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = if (isScreenSharing) Icons.Default.StopScreenShare else Icons.Default.ScreenShare,
+                            contentDescription = if (isScreenSharing) "Stop Screen Sharing" else "Share Screen with Rafel",
+                            tint = if (isScreenSharing) ColorNeonCyan else Color.White.copy(alpha = 0.9f),
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+
                     // Chat quick access button
                     IconButton(
                         onClick = onNavigateToChat,
@@ -427,6 +461,55 @@ fun HomeScreen(
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
                                 )
+                            }
+                        }
+                    }
+                }
+
+                // Secure Keystore Re-entry Warning Banner
+                AnimatedVisibility(
+                    visible = requiresKeyReentry,
+                    enter = fadeIn(),
+                    exit = fadeOut()
+                ) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFF2B1215).copy(alpha = 0.95f)
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, ColorCrimsonAccent.copy(alpha = 0.65f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.VpnKey,
+                                contentDescription = null,
+                                tint = Color(0xFFFF8A80),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = reentryMessage ?: "Secure storage reset ho gaya — kripya Gemini API key dobara daalo.",
+                                fontSize = 11.5.sp,
+                                color = Color.White,
+                                modifier = Modifier.weight(1f),
+                                lineHeight = 15.sp
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = { showSettingsDialog = true },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = CoreAmberGold),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Text("Key Daalo", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -752,16 +835,24 @@ fun HomeScreen(
             geminiApiKey = apiKey,
             onSaveSettings = { newGeminiKey ->
                 val trimmedKey = newGeminiKey.trim()
-                com.example.ai.security.SecureApiKeyStore.saveApiKey(context, trimmedKey)
-                apiKey = trimmedKey
-                val aiManager = com.example.ai.router.AIModelManager.getInstance(context)
-                aiManager.healthMonitor.clearCooldowns()
-                aiManager.isApiKeyConfigured()
-                RafelForegroundService.activeBackendManager?.updateActiveBackend()
-                if (trimmedKey.isNotBlank()) {
-                    RafelForegroundService.activeService?.reconnectSession()
+                val saved = com.example.ai.security.SecureApiKeyStore.saveApiKey(context, trimmedKey)
+                if (!saved && trimmedKey.isNotBlank()) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Secure storage error: kripya Gemini API key dobara daalo.",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    apiKey = trimmedKey
+                    val aiManager = com.example.ai.router.AIModelManager.getInstance(context)
+                    aiManager.healthMonitor.clearCooldowns()
+                    aiManager.isApiKeyConfigured()
+                    RafelForegroundService.activeBackendManager?.updateActiveBackend()
+                    if (trimmedKey.isNotBlank()) {
+                        RafelForegroundService.activeService?.reconnectSession()
+                    }
+                    showSettingsDialog = false
                 }
-                showSettingsDialog = false
             },
             onDismiss = { showSettingsDialog = false },
             onOpenAccessibility = {

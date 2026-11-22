@@ -183,6 +183,7 @@ class FloatingOverlayManager(private val context: Context) :
                         mode = _currentMode.value,
                         onModeChange = { newMode ->
                             _currentMode.value = newMode
+                            clampPositionForMode(newMode)
                         },
                         onOpenApp = {
                             hideOverlay()
@@ -245,13 +246,13 @@ class FloatingOverlayManager(private val context: Context) :
                     MotionEvent.ACTION_UP -> {
                         val duration = System.currentTimeMillis() - downTimestamp
                         if (!isMoving) {
-                            if (duration > 450) {
-                                // Long Press on compact core -> Quick Action Menu
-                                _currentMode.value = FloatingOverlayMode.LONG_PRESS_MENU
+                            val nextMode = if (duration > 450) {
+                                FloatingOverlayMode.LONG_PRESS_MENU
                             } else {
-                                // Single Tap on compact core -> Expanded Voice Interface
-                                _currentMode.value = FloatingOverlayMode.EXPANDED_VOICE_INTERFACE
+                                FloatingOverlayMode.EXPANDED_VOICE_INTERFACE
                             }
+                            _currentMode.value = nextMode
+                            clampPositionForMode(nextMode)
                         } else {
                             // Save new position
                             prefs.edit()
@@ -319,6 +320,26 @@ class FloatingOverlayManager(private val context: Context) :
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         store.clear()
+    }
+
+    private fun clampPositionForMode(mode: FloatingOverlayMode) {
+        val params = layoutParams ?: return
+        val view = composeView ?: return
+        val screen = getScreenDimensions()
+        val (targetWidthDp, targetHeightDp) = when (mode) {
+            FloatingOverlayMode.COMPACT_CORE -> 76 to 76
+            FloatingOverlayMode.EXPANDED_VOICE_INTERFACE -> 284 to 230
+            FloatingOverlayMode.LONG_PRESS_MENU -> 250 to 240
+        }
+        val maxX = (screen.x - dpToPx(targetWidthDp) - dpToPx(8)).coerceAtLeast(dpToPx(8))
+        val maxY = (screen.y - dpToPx(targetHeightDp) - dpToPx(48)).coerceAtLeast(dpToPx(36))
+        params.x = params.x.coerceIn(dpToPx(8), maxX)
+        params.y = params.y.coerceIn(dpToPx(36), maxY)
+        try {
+            windowManager?.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            RafelLogger.logError("Failed to clamp floating view layout", e)
+        }
     }
 
     private fun getScreenDimensions(): Point {
