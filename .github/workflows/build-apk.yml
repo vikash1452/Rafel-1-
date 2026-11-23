@@ -53,13 +53,36 @@ jobs:
           gradle-version: "9.3.1"
 
       - name: Prepare debug keystore
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
-          if [ ! -s debug.keystore.base64 ]; then
-            echo "::error::Missing or empty debug.keystore.base64 in repository root. Commit the fixed debug.keystore.base64 file so every APK is signed with the same debug key (prevents 'package conflicts with an existing package' errors)."
+          SECRET_B64="$(printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]')"
+          FILE_B64=""
+          if [ -f debug.keystore.base64 ]; then
+            FILE_B64="$(tr -d '[:space:]' < debug.keystore.base64)"
+          fi
+
+          if [ -n "$SECRET_B64" ]; then
+            echo "Decoding fixed debug keystore from GitHub Secret DEBUG_KEYSTORE_BASE64..."
+            printf '%s' "$SECRET_B64" | base64 -d > debug.keystore
+          elif [ -n "$FILE_B64" ]; then
+            echo "Decoding fixed debug keystore from repository root debug.keystore.base64..."
+            printf '%s' "$FILE_B64" | base64 -d > debug.keystore
+          else
+            echo "::error::Fixed debug keystore not found! Neither GitHub Secret DEBUG_KEYSTORE_BASE64 nor a non-empty debug.keystore.base64 file in the repository root is available."
+            echo "How to fix (choose ONE option):"
+            echo "  Option 1 (GitHub Secret - Recommended): Open GitHub Repository -> Settings -> Secrets and variables -> Actions -> New repository secret. Name: DEBUG_KEYSTORE_BASE64, Value: full base64 content of debug.keystore.base64."
+            echo "  Option 2 (Repository file): Commit and push the non-empty debug.keystore.base64 file to the repository root."
+            echo "Refusing to auto-generate a new keystore to prevent signing key mismatch ('package conflicts with an existing package')."
             exit 1
           fi
-          base64 -d debug.keystore.base64 > debug.keystore
-          keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey >/dev/null
+
+          if [ ! -s debug.keystore ]; then
+            echo "::error::Decoded debug.keystore is empty. Verify that DEBUG_KEYSTORE_BASE64 or debug.keystore.base64 contains valid base64 keystore data."
+            exit 1
+          fi
+
+          keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey
           echo "Fixed debug.keystore decoded and verified (alias: androiddebugkey)."
 
       - name: Build Debug APK
