@@ -74,18 +74,7 @@ class MicrophoneManager(
             )
             val bufferSize = if (minBufSize > 0) minBufSize * 4 else 8192
 
-            val recordCtx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                try {
-                    context.createAttributionContext("rafel_audio")
-                } catch (e: Exception) {
-                    context
-                }
-            } else {
-                context
-            }
-
-            audioRecord = AudioRecord.Builder()
-                .setContext(recordCtx)
+            val builder = AudioRecord.Builder()
                 .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
                 .setAudioFormat(
                     android.media.AudioFormat.Builder()
@@ -95,7 +84,16 @@ class MicrophoneManager(
                         .build()
                 )
                 .setBufferSizeInBytes(bufferSize)
-                .build()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try {
+                    builder.setContext(context.createAttributionContext("rafel_audio"))
+                } catch (_: Exception) {
+                    builder.setContext(context)
+                }
+            }
+
+            audioRecord = builder.build()
 
             val record = audioRecord
             if (record == null || record.state != AudioRecord.STATE_INITIALIZED) {
