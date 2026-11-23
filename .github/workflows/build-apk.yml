@@ -63,27 +63,27 @@ jobs:
           fi
 
           if [ -n "$SECRET_B64" ]; then
-            echo "Decoding fixed debug keystore from GitHub Secret DEBUG_KEYSTORE_BASE64..."
+            echo "Using fixed debug keystore from GitHub Secret DEBUG_KEYSTORE_BASE64..."
             printf '%s' "$SECRET_B64" | base64 -d > debug.keystore
           elif [ -n "$FILE_B64" ]; then
-            echo "Decoding fixed debug keystore from repository root debug.keystore.base64..."
+            echo "Using fixed debug keystore from repository root debug.keystore.base64..."
             printf '%s' "$FILE_B64" | base64 -d > debug.keystore
           else
-            echo "::error::Fixed debug keystore not found! Neither GitHub Secret DEBUG_KEYSTORE_BASE64 nor a non-empty debug.keystore.base64 file in the repository root is available."
-            echo "How to fix (choose ONE option):"
-            echo "  Option 1 (GitHub Secret - Recommended): Open GitHub Repository -> Settings -> Secrets and variables -> Actions -> New repository secret. Name: DEBUG_KEYSTORE_BASE64, Value: full base64 content of debug.keystore.base64."
-            echo "  Option 2 (Repository file): Commit and push the non-empty debug.keystore.base64 file to the repository root."
-            echo "Refusing to auto-generate a new keystore to prevent signing key mismatch ('package conflicts with an existing package')."
-            exit 1
+            echo "Using embedded fixed debug keystore from workflow..."
+            tr -d '[:space:]' <<'EOF' | base64 -d > debug.keystore
+          MIIKVgIBAzCCCgAGCSqGSIb3DQEHAaCCCfEEggntMIIJ6TCCBcAGCSqGSIb3DQEHAaCCBbEEggWtMIIFqTCCBaUGCyqGSIb3DQEMCgECoIIFQDCCBTwwZgYJKoZIhvcNAQUNMFkwOAYJKoZIhvcNAQUMMCsEFCV1TAMPmRjrt5SARVNnIbYtnrm7AgInEAIBIDAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQ8o5zFkrdvVxNzQJVMMEZOgSCBND8EaltJPEJ6J2eFERNlQyVD3kGDBoORV6V3e9T0Sf8Di+ZdbeqQg6ans8iMgC8p98cpUX00wOo6GlJl51RVjqm2XUT9vGOVVi9U+oqpR11smDI9ggBTAkVu7OsulFbUBMxnDkQDG0of6Xd10IpXzDmX8PssLshWBKmV3EJ7dyTXwK/93ldNybS8gMuSVZCKfPUAydrFiKpIGnIF0csRpQChELavMG2tnvBH3/oVHdzMpehEgMvxUK5rzXDG/THDBWNb/W9r/NkLzwuQp2jDbmHLdt74efPPkLmbPP9N95NMlVXfYpd2Kx1h9HpCHzF3+Amxa3VHFz6KoYhHpS8152L/66oxtSK2FHG5+KcPbO8oyTH2KUUfYdYP0977E8nE3PMo0FRzfBoTp5p2I2YndUCFJF6mYjpiC/FvLe8oEk7TsUTdmK4EItZzDIKbl0zt7kFVzAb+ZCQG/aULvk7iAIC24OlUEs3dXWS8QaABceDwraHgd/crm08QEl7BNWHi6ZTftIyBvw/XFPxI2B1eE1wjIYgC+kcOOgksvST45Ajd8MMj9iSYZiP3TU4fUGcuwkhyvw2/l75B5TWWCe69KpvJLuIWe2MW1MWzD4t9eUHzSgY604zNWQV8pQGwZL4yLCDJ/a5HCdCoSlHlsULjQuztz116ds7dEWiRneW1ixW7T2sJE3sTpFmrUNQyXEFceYscc4xgP49Y0zPmRkQ8b0izG38CB0mE+g0PGeCiSqwusXwjSkkUgIvgSluqjSBg8JEWOZ7ifFV30ZxOBzpTe0mYfcWS5BPklHozNRwzekvtmS6P1j30SwWpbCBqt505qFIrDfaP/LvdfmSwII4BjMbweH/+lHfWsNwx4jOynlT/ZmBeSi+sj87LTu1SzXrxit1hbxEvf149U2pCAge0Pyz03Q3VIrYliT0W1ZnWuCoSZpGbUxIlFmITnc8CbaLkrveK7zreeeGR89Ao9nxqNELNVyh6YQKTavQloBORSKLIal6YQLmECqcCnzQXn2y+wZG5QwAEgfQyHNDcmjjTw4CFsnoEv8MnLxYEtUoMD1/w3da7S5Hhp/uYcE3IJoh1FcPpK9z3sp37+iV9VOUYAyTSZ9cVpi2xf3195WGbek4K53eEKpPWVjmRnmJZT49NT36N7tnwE/+PKTOme0e8Xn6vvNg1LiCut9Z/CKjeNaxtwFqiowDsPyeLX396hQlu2mfdtvfZpdoATupdfpVLI69GU8sRN6VDlu4fqm5HXnOP54xGEaBMaYn0y3mgq+awuHT38rL1+c2wkUICcagl4BCtPvbc5tX/NcSH8S1BVZwqFwK/1nMT3ZtVAGa3wdqYgevHHau9t4II3TWrc0w90WAvzrPzusSlk9cETzR2v0PT+2xXDkZk6NiV1aZhwlImxOfNOw9WQMOtc2A8npmcNXbzKJ1mQu3C5iYdgjrjdK6eThyCEaFhCdzyJkkFX9nNLzLFdqIAfrdcoqPCPkDnJ+uU9XXaKrLs1kK5It8ollnUbyYff0pCq6kfVEKMbpXQh+tBE1SQAr65Vu4HkRG+arN9/xdKERntpyNJYE9xhw5Xi1AIVt3yvT8J5lr3WSL+yhofpsm98evbC7tC9jDgTciyCm8v9CoS4gjLXHQIjuyZTFSMC0GCSqGSIb3DQEJFDEgHh4AYQBuAGQAcgBvAGkAZABkAGUAYgB1AGcAawBlAHkwIQYJKoZIhvcNAQkVMRQEElRpbWUgMTc5MzIzNTM5OTY5MzCCBCEGCSqGSIb3DQEHBqCCBBIwggQOAgEAMIIEBwYJKoZIhvcNAQcBMGYGCSqGSIb3DQEFDTBZMDgGCSqGSIb3DQEFDDArBBTG2LPc/qziBrZxPSS8pbnuPVz5EgICJxACASAwDAYIKoZIhvcNAgkFADAdBglghkgBZQMEASoEEMuCYe18xvbnoibOJwQMTi+AggOQYIQo05kUg5JezqSUaBbCAsog8r0Bt2H9xfLPJR7dOhIGTE0xiBVfGgASzT/PQ2FJpx2hy9ISjcONH0+DpAE0ImuiGn9EnSaAOZpCAQQ4AMHiix9oxknMV05kcduEZGGwya3cdlF/85HRcPr8OVurmk8IVGviK6f8GNp9npNaUU2sXHtT1/MYNM9IYMwBlj0BZYFYylgoEX/m/bMBGVxE905TCpyQ/zvn02VEBN9vi7ZO9Zw+sseAYqkaZgSd3nWpj1LynT3M7knv2BNMpw6/qR4MEIS4J+iXSUQ1mDFvNicOFQoL9295Gz0kodsc6UXSvz7mZR/oVCgvx/ILpPpLzqDGPNNodBRUt4CBP5XMBQhWmbNsmnVBtStJ2Q/DZ5ZGA2x0VterUvenvh2BoKOlq1LU+wt6MLzUmM141rZ/j9eIhNk9YIKFwcp8QA7+WCGN9IU+m6IFOmjXIFgfb5+rdgpDjhOHAiMXLvnBkTxSno0Vdrhn87wgXcn8IESEVqfKSzh9/p/pNkp2tyg/BxipzYBLU567Q/LTOD/P2iF4f4bbqXu7mcXSGa9wf5VPKVfxq9DpwatDgiS1S5DZ0XhC3vw9WyOihg71yrTQVk05urWcJ9yl4UIwiBJIXcEW4QvLeyc4OPTl8jWS320h5lNbf429uzQTc7GB4+/o64dNq5/XgaTj+VBiqfxV1cBlXNo8Cj3pveKmUFFyx/ZA2Q8N6pMH9bZ2VASLV4V3myTM8sfeVfC5XHZlxJZtYjWqDSLRxS9nNWTrnfAGHytYgOId387Vw4ZS8Pn+dwKFWxGqz2s4Ei96wtPjRhDtQf09MVkhkS5P14xapBeBuTJ94nYrwTrYKdog7hl9itRusBn+343Y3T9dE02xKGFhlPoMnHBfKUcDDwWLpI98DtKg1ien/DCQT9HHrRZYDG+ITQ5T7KrXzOqWscoL/pI6LBuHkh57UcGILwLZ90cAsFZ3EHkWdIJQHEzHCBotadb0IC9+UnisR/QNTi93TgiIPej6vXsG2WyhwwskFyrRiAAlZ8JYWorjw+yLLuH2rChg069tOO87FNB4sEM0cxZBFUEiSbZR9LktVRTWJfLMQF1kUpoJRsN2nuYibmAPQKa3xRbR3BEwRZUXoK1i8JebOlf38HroTwsXBxitOcFgT6HUleZELNOGkjEcLJYks7RIXVHS+e/+uikbJnIC+C1xbPGt75SfME0wMTANBglghkgBZQMEAgEFAAQgKSWlhzo6xfgFaszfkaXX/BR722xxxZ5+pzOw0xju4AcEFETReUHYpC5grD40FgvLmQq+11fcAgInEA==
+          EOF
           fi
 
           if [ ! -s debug.keystore ]; then
-            echo "::error::Decoded debug.keystore is empty. Verify that DEBUG_KEYSTORE_BASE64 or debug.keystore.base64 contains valid base64 keystore data."
+            echo "::error::Decoded debug.keystore is empty."
             exit 1
           fi
 
-          keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey
-          echo "Fixed debug.keystore decoded and verified (alias: androiddebugkey)."
+          KEYTOOL_OUT="$(keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey)"
+          echo "$KEYTOOL_OUT"
+          SHA256_FP="$(printf '%s\n' "$KEYTOOL_OUT" | grep -i 'SHA-256' || true)"
+          echo "Verified debug signing key (alias: androiddebugkey) — $SHA256_FP"
 
       - name: Build Debug APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
